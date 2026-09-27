@@ -104,6 +104,14 @@ func TestDockerDeploys(t *testing.T) {
 	}
 	expectServing(t, app, "v3")
 
+	// A crash on start fails the deploy at once, with the app's output.
+	start := time.Now()
+	out = deployVersion("crashing", true)
+	if time.Since(start) > 30*time.Second {
+		t.Errorf("a crashing app took %v to be rejected", time.Since(start))
+	}
+	expectServing(t, app, "v3")
+
 	// Shared volumes keep the zero-downtime switch.
 	if err := SetShareVolumes(s, app.Name, true); err != nil {
 		t.Fatal(err)
@@ -162,8 +170,11 @@ func newDockerTestApp(t *testing.T, s *store.Store) store.App {
 func buildTestImage(t *testing.T, tag, version string) {
 	t.Helper()
 	cmd := `mkdir -p /data && date >> /data/log && exec httpd -f -p 8080 -h /www`
-	if version == "broken" {
+	switch version {
+	case "broken":
 		cmd = "sleep 3600" // never listens
+	case "crashing":
+		cmd = "echo missing POSTGRES_PASSWORD >&2; exit 1"
 	}
 	dir := t.TempDir()
 	dockerfile := fmt.Sprintf("FROM busybox:1.36\nRUN mkdir /www && echo -n %s > /www/index.html\nCMD [\"sh\", \"-c\", %q]\n", version, cmd)

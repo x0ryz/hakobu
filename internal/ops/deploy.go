@@ -269,7 +269,13 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 
 	var port int64
 	var loopbackOnly []int
+	var crashed bool
 	healthy := deploy.WaitHealthy(60, time.Second, func() bool {
+		// A container that exits or restarts will never answer; stop waiting.
+		if status, restarts := deploy.ContainerStatus(ctx(), candidate); status == "exited" || status == "dead" || restarts > 0 {
+			crashed = true
+			return true
+		}
 		port = app.ContainerPort
 		if port == 0 {
 			var reachable []int
@@ -278,12 +284,14 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		}
 		return port > 0 && deploy.HTTPCheck(fmt.Sprintf("http://%s:%d%s", ip, port, path), requireOK)
 	})
-	if !healthy {
+	if !healthy || crashed {
 		logs, _ := deploy.ContainerLogs(ctx(), candidate, 50)
 		deploy.RemoveContainer(ctx(), candidate)
 		restoreOld()
 		reason := fmt.Sprintf("didn't answer on port %d within 60s", port)
 		switch {
+		case crashed:
+			reason = "exited while starting (see its output below; a missing variable or an unreachable database are the usual causes)"
 		case port == 0 && len(loopbackOnly) > 0:
 			reason = fmt.Sprintf("listens only on 127.0.0.1 (port %v); bind it to 0.0.0.0", loopbackOnly)
 		case port == 0:
