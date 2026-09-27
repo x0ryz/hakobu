@@ -153,19 +153,8 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		if err := rollOut(s, app, next, out); err != nil {
 			return err
 		}
-		// Only a build that went live becomes :latest; the one it replaced
-		// becomes the rollback target and the old rollback target is deleted.
-		dropped := deploy.ImageID(ctx(), PreviousImageTag(app))
-		if ok, _ := deploy.ImageExists(ctx(), ImageTag(app)); ok {
-			if err := deploy.TagImage(ctx(), ImageTag(app), PreviousImageTag(app)); err != nil {
-				fmt.Fprintln(out, "warning: failed to keep the previous image for rollback:", err)
-			}
-		}
-		if err := deploy.TagImage(ctx(), next, ImageTag(app)); err != nil {
+		if err := promote(app, out); err != nil {
 			return err
-		}
-		if dropped != "" && dropped != deploy.ImageID(ctx(), PreviousImageTag(app)) && dropped != deploy.ImageID(ctx(), ImageTag(app)) {
-			deploy.RemoveImage(ctx(), dropped)
 		}
 		if w, err := s.GetWorker(ctx(), app.Name); err == nil {
 			if err := runWorker(s, app, w, out); err != nil {
@@ -174,6 +163,25 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		}
 		return nil
 	})
+}
+
+// promote makes the :next build that just went live :latest; the image it
+// replaced becomes the rollback target and the old rollback target is deleted.
+func promote(app store.App, out io.Writer) error {
+	latest, prev := ImageTag(app), PreviousImageTag(app)
+	dropped := deploy.ImageID(ctx(), prev)
+	if ok, _ := deploy.ImageExists(ctx(), latest); ok {
+		if err := deploy.TagImage(ctx(), latest, prev); err != nil {
+			fmt.Fprintln(out, "warning: failed to keep the previous image for rollback:", err)
+		}
+	}
+	if err := deploy.TagImage(ctx(), nextImageTag(app), latest); err != nil {
+		return err
+	}
+	if dropped != "" && dropped != deploy.ImageID(ctx(), prev) && dropped != deploy.ImageID(ctx(), latest) {
+		deploy.RemoveImage(ctx(), dropped)
+	}
+	return nil
 }
 
 // StartRollback redeploys the image that was live before the current one;
