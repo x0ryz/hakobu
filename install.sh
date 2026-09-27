@@ -39,6 +39,7 @@ docker inspect buildkit >/dev/null 2>&1 || docker run --privileged -d --name bui
 
 echo "==> installing hakobu to /opt/hakobu"
 mkdir -p "$DATA"
+chmod 700 "$DATA"
 # The running binary can't be overwritten ("text file busy").
 systemctl stop hakobu 2>/dev/null || true
 VERSION="${HAKOBU_VERSION:-}"

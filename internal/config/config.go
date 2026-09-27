@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -29,6 +30,17 @@ const (
 	appsDomainFile = "data/apps_domain"
 	setupTokenFile = "data/setup_token"
 )
+
+// PrepareDataDir makes data/ (database, secrets, clones) private to the user
+// hakobu runs as, including on installs that created it world-readable, and
+// makes every file hakobu creates from now on private too.
+func PrepareDataDir() error {
+	syscall.Umask(0o077)
+	if err := os.MkdirAll("data", 0o700); err != nil {
+		return err
+	}
+	return os.Chmod("data", 0o700)
+}
 
 // PublicHost is the panel's hostname (no scheme), chosen by `hakobu setup`.
 // HAKOBU_PUBLIC_HOST overrides it.

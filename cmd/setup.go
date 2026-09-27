@@ -33,7 +33,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if config.CloudflareClientID == "" {
 		return fmt.Errorf("this build has no Cloudflare OAuth client (set HAKOBU_CF_CLIENT_ID)")
 	}
-	if err := os.MkdirAll("data", 0o755); err != nil {
+	if err := config.PrepareDataDir(); err != nil {
 		return err
 	}
 	s, err := store.Open("data/hakobu.db")
