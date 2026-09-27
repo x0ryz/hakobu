@@ -22,3 +22,11 @@ func TestJobReservation(t *testing.T) {
 		t.Error("the queue should be empty after it was handed out")
 	}
 }
+
+func TestHumanBytes(t *testing.T) {
+	for in, want := range map[uint64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 64 << 30: "64.0 GB"} {
+		if got := humanBytes(in); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -467,4 +468,108 @@ func ImageExists(ctx context.Context, ref string) (bool, error) {
 	default:
 		return false, fmt.Errorf("image inspect failed (%d)", status)
 	}
+}
+
+// ImageID returns the ID ref points at, "" if there's no such image.
+func ImageID(ctx context.Context, ref string) string {
+	respBody, status, err := dockerRequest(ctx, "GET", "/images/"+url.PathEscape(ref)+"/json", nil)
+	if err != nil || status != http.StatusOK {
+		return ""
+	}
+	var img struct {
+		ID string `json:"Id"`
+	}
+	json.Unmarshal(respBody, &img)
+	return img.ID
+}
+
+// RemoveImage removes a tag, or an image by ID, and the image itself once
+// nothing else references it. Missing images and images still used by a
+// container are left alone without an error.
+func RemoveImage(ctx context.Context, ref string) error {
+	respBody, status, err := dockerRequest(ctx, "DELETE", "/images/"+url.PathEscape(ref), nil)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK, http.StatusNotFound, http.StatusConflict:
+		return nil
+	}
+	return fmt.Errorf("image remove %s failed (%d): %s", ref, status, respBody)
+}
+
+// ImageTags lists the tags of images whose repository matches pattern,
+// e.g. "hakobu/*".
+func ImageTags(ctx context.Context, pattern string) ([]string, error) {
+	filters, _ := json.Marshal(map[string][]string{"reference": {pattern}})
+	respBody, status, err := dockerRequest(ctx, "GET", "/images/json?filters="+url.QueryEscape(string(filters)), nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("image list failed (%d): %s", status, respBody)
+	}
+	var images []struct {
+		RepoTags []string `json:"RepoTags"`
+	}
+	if err := json.Unmarshal(respBody, &images); err != nil {
+		return nil, err
+	}
+	var tags []string
+	for _, img := range images {
+		tags = append(tags, img.RepoTags...)
+	}
+	return tags, nil
+}
+
+// PruneBuildCache drops build cache unused for longer than keep, both
+// Docker's (Dockerfile builds) and the buildkit container's (Railpack). It
+// returns the bytes Docker reports as freed; buildkit doesn't report it.
+func PruneBuildCache(ctx context.Context, keep time.Duration) (freed int64, err error) {
+	filters, _ := json.Marshal(map[string][]string{"until": {keep.String()}})
+	respBody, status, err := dockerRequest(ctx, "POST", "/build/prune?filters="+url.QueryEscape(string(filters)), nil)
+	if err != nil {
+		return 0, err
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("build cache prune failed (%d): %s", status, respBody)
+	}
+	var res struct {
+		SpaceReclaimed int64 `json:"SpaceReclaimed"`
+	}
+	json.Unmarshal(respBody, &res)
+
+	if info, _ := inspect(ctx, "buildkit"); info != nil && info.State.Status == "running" {
+		out, code, err := execInContainer(ctx, "buildkit", []string{"buildctl", "prune", "--keep-duration", keep.String()})
+		if err == nil && code != 0 {
+			err = fmt.Errorf("buildctl prune exited %d: %s", code, strings.TrimSpace(out))
+		}
+		if err != nil {
+			return res.SpaceReclaimed, err
+		}
+	}
+	return res.SpaceReclaimed, nil
+}
+
+// Disk reports usage of the filesystem Docker stores images and volumes on.
+func Disk(ctx context.Context) (used, total uint64, err error) {
+	respBody, status, err := dockerRequest(ctx, "GET", "/info", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	if status != http.StatusOK {
+		return 0, 0, fmt.Errorf("docker info failed (%d)", status)
+	}
+	var info struct {
+		DockerRootDir string `json:"DockerRootDir"`
+	}
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return 0, 0, err
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(info.DockerRootDir, &st); err != nil {
+		return 0, 0, err
+	}
+	total = st.Blocks * uint64(st.Bsize)
+	return total - st.Bavail*uint64(st.Bsize), total, nil
 }

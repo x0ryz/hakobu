@@ -427,11 +427,19 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	handle("GET /settings", func(w http.ResponseWriter, r *http.Request) {
 		owner, _ := s.Owner(r.Context())
 		allowed, _ := s.AllowedLogins(r.Context())
-		data := map[string]any{"PublicHost": config.PublicHost(), "Owner": owner, "Allowed": strings.Join(allowed, ", ")}
+		disk, diskLow := ops.DiskUsage()
+		data := map[string]any{
+			"PublicHost": config.PublicHost(), "Owner": owner, "Allowed": strings.Join(allowed, ", "),
+			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
+		}
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
 		}
 		render(w, "settings", data)
+	})
+
+	action("POST /settings/cleanup", func(r *http.Request) (string, error) {
+		return "", ops.Cleanup(s)
 	})
 
 	action("POST /settings/access", func(r *http.Request) (string, error) {

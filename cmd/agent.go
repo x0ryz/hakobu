@@ -135,6 +135,9 @@ func runBackupScheduler(s *store.Store) {
 		if err := s.PruneOldData(context.Background(), config.RetentionDays); err != nil {
 			fmt.Println("prune failed:", err)
 		}
+		if err := ops.Cleanup(s); err != nil {
+			fmt.Println("cleanup failed:", err)
+		}
 	}
 }
 

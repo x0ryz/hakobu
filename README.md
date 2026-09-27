@@ -12,6 +12,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
 - **Sign-in with GitHub only**; the owner can allow more GitHub users.
 - **Cloudflare Tunnel**: panel and apps on your domain with HTTPS, no open ports.
+- **Keeps the disk in check**: each app keeps only its live image and one for rollback; unused build cache is dropped daily.
 - Single Go binary + SQLite. Needs only Docker.
 
 ## Install

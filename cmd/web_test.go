@@ -30,7 +30,7 @@ func TestTemplatesRender(t *testing.T) {
 		"output":   "log line",
 		"errors":   []store.TelemetryEvent{{Kind: "error", Message: "boom"}},
 		"database": map[string]any{"DB": db, "Project": project, "Ready": true, "Env": splitEnv([]string{"A=1"}), "Storages": storages, "Backups": []store.Backup{{ObjectKey: "k", SizeBytes: 2048}}, "UsedBy": []string{"web"}},
-		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "Allowed": "", "GitHubSlug": "hakobu-p"},
+		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "Allowed": "", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB"},
 	}
 	for name, data := range cases {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {

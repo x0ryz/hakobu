@@ -569,6 +569,15 @@ function envEditor(seed, suggestURL) {
     <p class="text-sm text-dim">Public URL: <span class="mono">https://{{.PublicHost}}</span></p>
     {{if .GitHubSlug}}<p class="text-sm text-dim">GitHub App: <a href="https://github.com/apps/{{.GitHubSlug}}" target="_blank" class="underline mono">{{.GitHubSlug}}</a> · <a href="https://github.com/apps/{{.GitHubSlug}}/installations/new" target="_blank" class="underline">manage repository access</a></p>{{end}}
   </div>
+  <div class="card">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="h2">Disk</h2>
+      <button hx-post="/settings/cleanup" class="btn">Clean up now</button>
+    </div>
+    <p class="text-sm {{if .DiskLow}}text-bad{{else}}text-dim{{end}}">{{.Disk}}{{if .DiskLow}}: running low, deploys and databases fail on a full disk{{end}}</p>
+    <p class="text-xs text-faint">Every day hakobu deletes build cache unused for a week and images of deleted apps; each app keeps only its live image and one for rollback.{{if .LastCleanup}} Last run {{.LastCleanup}}.{{end}}</p>
+  </div>
+
   <form hx-post="/settings/access" class="card">
     <h2 class="h2">Who can sign in</h2>
     <p class="text-sm text-dim">Owner: <span class="mono">{{.Owner}}</span></p>

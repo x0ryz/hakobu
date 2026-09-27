@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -127,7 +128,8 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		if err != nil {
 			return err
 		}
-		workDir := "data/work/" + app.Name
+		workDir := workDir(app.Name)
+		defer os.RemoveAll(workDir) // the next deploy clones again anyway
 		fmt.Fprintln(out, "cloning", app.Repo)
 		if err := build.CloneRepo(github.CloneURL(app.Repo), token, workDir, out); err != nil {
 			return fmt.Errorf("clone failed: %w", err)
@@ -141,6 +143,9 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		}
 
 		next := nextImageTag(app)
+		// Drops the :next tag in every case: a failed build or health check
+		// leaves nothing behind, a successful one is :latest by then.
+		defer deploy.RemoveImage(ctx(), next)
 		fmt.Fprintf(out, "building %s from %s (%s)\n", next, buildDir, app.BuildStrategy)
 		if err := build.BuildWithStrategy(buildDir, next, app.BuildStrategy, out); err != nil {
 			return fmt.Errorf("build failed: %w", err)
@@ -149,7 +154,8 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 			return err
 		}
 		// Only a build that went live becomes :latest; the one it replaced
-		// becomes the rollback target.
+		// becomes the rollback target and the old rollback target is deleted.
+		dropped := deploy.ImageID(ctx(), PreviousImageTag(app))
 		if ok, _ := deploy.ImageExists(ctx(), ImageTag(app)); ok {
 			if err := deploy.TagImage(ctx(), ImageTag(app), PreviousImageTag(app)); err != nil {
 				fmt.Fprintln(out, "warning: failed to keep the previous image for rollback:", err)
@@ -157,6 +163,9 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		}
 		if err := deploy.TagImage(ctx(), next, ImageTag(app)); err != nil {
 			return err
+		}
+		if dropped != "" && dropped != deploy.ImageID(ctx(), PreviousImageTag(app)) && dropped != deploy.ImageID(ctx(), ImageTag(app)) {
+			deploy.RemoveImage(ctx(), dropped)
 		}
 		if w, err := s.GetWorker(ctx(), app.Name); err == nil {
 			if err := runWorker(s, app, w, out); err != nil {
@@ -179,6 +188,7 @@ func StartRollback(s *store.Store, appName string) error {
 	}
 	return startJob(s, appName, "rollback", func(app store.App, out io.Writer) error {
 		prev, latest, swap := PreviousImageTag(app), ImageTag(app), nextImageTag(app)
+		defer deploy.RemoveImage(ctx(), swap)
 		if err := rollOut(s, app, prev, out); err != nil {
 			return err
 		}

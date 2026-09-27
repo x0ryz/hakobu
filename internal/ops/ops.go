@@ -157,6 +157,7 @@ func DeleteApp(s *store.Store, name string) error {
 			return err
 		}
 	}
+	removeAppImages(app.Name)
 	return nil
 }
 
