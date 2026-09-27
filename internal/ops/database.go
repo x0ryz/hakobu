@@ -44,7 +44,7 @@ func ensurePostgres() error {
 
 func CreateDatabase(s *store.Store, projectName, name string) error {
 	if !validDBName.MatchString(name) {
-		return fmt.Errorf("invalid database name %q: use lowercase letters, digits and underscores, starting with a letter", name)
+		return fmt.Errorf("invalid database name %q: use lowercase letters, digits, dashes and underscores, starting with a letter", name)
 	}
 	p, err := s.GetProject(ctx(), projectName)
 	if err != nil {

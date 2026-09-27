@@ -29,7 +29,8 @@ func RandomHex(n int) (string, error) {
 // identifiers, so they are restricted to what all of those accept.
 var (
 	validName   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	validDBName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+	// Database names are always double-quoted in SQL, where dashes are fine.
+	validDBName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 )
 
 func checkName(kind, name string) error {

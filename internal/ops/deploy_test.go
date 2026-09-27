@@ -70,3 +70,14 @@ func TestAddVolumeValidation(t *testing.T) {
 		t.Errorf("binds = %v", binds)
 	}
 }
+
+func TestDatabaseNames(t *testing.T) {
+	for name, ok := range map[string]bool{
+		"kasl-db": true, "main": true, "app_data": true, "db2": true,
+		"2db": false, "Main": false, `a"b`: false, "a b": false, "a;drop": false, "": false,
+	} {
+		if validDBName.MatchString(name) != ok {
+			t.Errorf("validDBName(%q) = %v, want %v", name, !ok, ok)
+		}
+	}
+}
