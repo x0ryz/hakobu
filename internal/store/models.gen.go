@@ -30,6 +30,7 @@ type App struct {
 	HealthCheckPath string
 	LinkedDB        string
 	LinkedStorage   string
+	ShareVolumes    int64
 }
 
 type AppRecord struct {
@@ -51,6 +52,7 @@ type AppRecord struct {
 	LivePort        int64
 	DnsZoneID       string
 	DnsRecordID     string
+	ShareVolumes    int64
 }
 
 type Backup struct {
@@ -132,6 +134,12 @@ type TelemetryEvent struct {
 	Message   string
 	Payload   string
 	CreatedAt string
+}
+
+type Volume struct {
+	AppName   string
+	Name      string
+	MountPath string
 }
 
 type Worker struct {

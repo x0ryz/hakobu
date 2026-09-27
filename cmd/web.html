@@ -403,8 +403,34 @@ function envEditor(seed, suggestURL) {
     <button class="btn">Save</button>
   </form>
 
+  <div class="card">
+    <div>
+      <h2 class="h2">Volumes</h2>
+      <p class="text-xs text-faint">Directories that survive redeploys, shared by the app and its worker. Everything else in the container is reset on every deploy. Changes apply on the next deploy.</p>
+    </div>
+    {{range .Volumes}}
+    <div class="flex items-center justify-between gap-3 text-sm">
+      <span class="mono"><span class="font-medium">{{.Name}}</span> <span class="text-faint">→</span> {{.MountPath}}</span>
+      <button hx-delete="/apps/{{$.App.Name}}/volumes/{{.Name}}" hx-confirm="Remove volume {{.Name}}? Its data is deleted." class="link hover:text-bad">Remove</button>
+    </div>
+    {{end}}
+    <form hx-post="/apps/{{.App.Name}}/volumes" class="flex flex-wrap gap-2">
+      <input name="name" placeholder="name, e.g. data" required class="input mono w-36">
+      <input name="mount_path" placeholder="path in the container, e.g. /app/data" required class="input mono flex-1 min-w-48">
+      <button class="btn">Add volume</button>
+    </form>
+    {{if .Volumes}}
+    <form hx-post="/apps/{{.App.Name}}/share-volumes" hx-trigger="change" class="border-t border-edge pt-3">
+      <label class="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="share" value="1" {{if .App.ShareVolumes}}checked{{end}} class="mt-1">
+        <span>Deploy without downtime<br><span class="text-xs text-faint">{{if .App.ShareVolumes}}The new and old version share the volumes for a few seconds during the switch.{{else}}Off: the old version stops before the new one starts (a few seconds of downtime), so two versions never write the same data, e.g. an SQLite database. Turn on if the volumes only hold uploads or cache.{{end}}</span></span>
+      </label>
+    </form>
+    {{end}}
+  </div>
+
   <div class="flex justify-end">
-    <button hx-delete="/apps/{{.App.Name}}" hx-confirm="Delete app {{.App.Name}}? Its containers are stopped and removed." class="btn-danger">Delete app</button>
+    <button hx-delete="/apps/{{.App.Name}}" hx-confirm="Delete app {{.App.Name}}? Its containers are removed{{if .Volumes}} and its volumes are deleted with their data{{end}}." class="btn-danger">Delete app</button>
   </div>
 </div>
 

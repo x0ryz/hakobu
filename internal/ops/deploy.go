@@ -207,6 +207,10 @@ func StartRollback(s *store.Store, appName string) error {
 // rollOut is the blue/green swap: start the inactive slot, health-check it
 // on the docker network, point the proxy at it, then remove the old slot.
 // If the candidate never gets healthy the old slot keeps serving.
+//
+// An app with volumes is recreated instead, unless it shares them: the old
+// version is stopped first so two versions never write the same data, and
+// started again if the new one fails.
 func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) error {
 	hint := portHint(app, int64(deploy.ExposedPort(ctx(), imageTag)))
 	env, err := appEnv(s, app, hint)
@@ -217,14 +221,34 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	if app.ActiveSlot == "green" {
 		oldSlot, newSlot = "green", "blue"
 	}
-	candidate := app.Name + "-" + newSlot
+	candidate, old := app.Name+"-"+newSlot, app.Name+"-"+oldSlot
+
+	binds, err := appBinds(s, app.Name)
+	if err != nil {
+		return err
+	}
+	recreate := len(binds) > 0 && app.ShareVolumes == 0
+	if recreate {
+		fmt.Fprintln(out, "the app has volumes: stopping", old, "before starting the new version")
+		if err := deploy.StopContainer(ctx(), old); err != nil {
+			return err
+		}
+	}
+	restoreOld := func() {
+		if recreate {
+			restartContainer(app, old, out)
+		}
+	}
 
 	fmt.Fprintln(out, "starting", candidate)
-	if _, err := deploy.RunAppContainer(ctx(), imageTag, candidate, env); err != nil {
+	if _, err := deploy.RunAppContainer(ctx(), imageTag, candidate, env, binds); err != nil {
+		restoreOld()
 		return err
 	}
 	ip, err := deploy.ContainerIP(ctx(), candidate)
 	if err != nil {
+		deploy.RemoveContainer(ctx(), candidate)
+		restoreOld()
 		return err
 	}
 	path := "/" + strings.TrimPrefix(app.HealthCheckPath, "/")
@@ -249,6 +273,7 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	if !healthy {
 		logs, _ := deploy.ContainerLogs(ctx(), candidate, 50)
 		deploy.RemoveContainer(ctx(), candidate)
+		restoreOld()
 		reason := fmt.Sprintf("didn't answer on port %d within 60s", port)
 		switch {
 		case port == 0 && len(loopbackOnly) > 0:
@@ -258,7 +283,11 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		case requireOK:
 			reason = fmt.Sprintf("didn't return 2xx on port %d%s within 60s", port, path)
 		}
-		return fmt.Errorf("new version %s; previous version keeps running\n--- container output ---\n%s", reason, logs)
+		kept := "previous version keeps running"
+		if recreate {
+			kept = "previous version was started again"
+		}
+		return fmt.Errorf("new version %s; %s\n--- container output ---\n%s", reason, kept, logs)
 	}
 
 	if _, err := proxy.Ensure(app.Name, app.Port); err != nil {
@@ -276,6 +305,23 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	}
 	fmt.Fprintf(out, "live: container port %d, 127.0.0.1:%d (%s)\n", port, app.Port, imageTag)
 	return nil
+}
+
+// restartContainer brings a stopped previous version back after a failed
+// recreate deploy and points the proxy at it again.
+func restartContainer(app store.App, name string, out io.Writer) {
+	if status, _ := deploy.ContainerStatus(ctx(), name); status == "not found" {
+		return
+	}
+	if err := deploy.StartContainer(ctx(), name); err != nil {
+		fmt.Fprintln(out, "failed to start the previous version again:", err)
+		return
+	}
+	if ip, err := deploy.ContainerIP(ctx(), name); err == nil {
+		u, _ := url.Parse(fmt.Sprintf("http://%s:%d", ip, portHint(app, 0)))
+		proxy.SetTarget(app.Name, u)
+	}
+	fmt.Fprintln(out, "started the previous version again:", name)
 }
 
 // portHint is the PORT the app is told to listen on: the configured port,
@@ -326,8 +372,12 @@ func runWorker(s *store.Store, app store.App, w store.Worker, out io.Writer) err
 	if err != nil {
 		return err
 	}
+	binds, err := appBinds(s, app.Name)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintln(out, "starting worker", w.ContainerName())
-	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), w.Command, env)
+	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), w.Command, env, binds)
 	return err
 }
 

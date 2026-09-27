@@ -246,6 +246,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"Effective": splitEnv(env), "EnvError": envErr, "Zones": zoneNames(s),
 		}
 		data["Sub"], data["Zone"] = splitDomain(app.Domain, data["Zones"].([]string))
+		data["Volumes"], _ = s.ListVolumes(r.Context(), app.Name)
 		if w, err := s.GetWorker(r.Context(), app.Name); err == nil {
 			data["Worker"] = w
 			data["WorkerStatus"], _ = deploy.ContainerStatus(r.Context(), w.ContainerName())
@@ -296,6 +297,18 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			ContainerPort:   port,
 			HealthCheckPath: strings.TrimSpace(r.FormValue("health_check_path")),
 		})
+	})
+
+	action("POST /apps/{a}/volumes", func(r *http.Request) (string, error) {
+		return "", ops.AddVolume(s, r.PathValue("a"), strings.TrimSpace(r.FormValue("name")), r.FormValue("mount_path"))
+	})
+
+	action("DELETE /apps/{a}/volumes/{v}", func(r *http.Request) (string, error) {
+		return "", ops.RemoveVolume(s, r.PathValue("a"), r.PathValue("v"))
+	})
+
+	action("POST /apps/{a}/share-volumes", func(r *http.Request) (string, error) {
+		return "", ops.SetShareVolumes(s, r.PathValue("a"), r.FormValue("share") != "")
 	})
 
 	action("POST /apps/{a}/links", func(r *http.Request) (string, error) {

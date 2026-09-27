@@ -1,6 +1,11 @@
 package ops
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/x0ryz/hakobu/internal/store"
+)
 
 func TestJobReservation(t *testing.T) {
 	if ok, err := reserve("web", false); !ok || err != nil {
@@ -28,5 +33,40 @@ func TestHumanBytes(t *testing.T) {
 		if got := humanBytes(in); got != want {
 			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDockerVolumeNamesAreUnambiguous(t *testing.T) {
+	if dockerVolume("a-b", "c") == dockerVolume("a", "b-c") {
+		t.Error("different app/volume pairs map to the same Docker volume")
+	}
+	if got := dockerVolume("web", "data"); got != "hakobu-vol-web_data" {
+		t.Errorf("dockerVolume = %q", got)
+	}
+}
+
+func TestAddVolumeValidation(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AddVolume(s, "web", "data", "/app/data/"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, path string }{
+		{"data", "/other"},     // duplicate name
+		{"files", "/app/data"}, // duplicate path
+		{"files", "relative"},  // not absolute
+		{"files", "/"},         // the whole filesystem
+		{"files", "/a:/b"},     // bind syntax injection
+		{"Bad_Name", "/files"}, // invalid name
+	} {
+		if err := AddVolume(s, "web", c.name, c.path); err == nil {
+			t.Errorf("AddVolume(%q, %q) should fail", c.name, c.path)
+		}
+	}
+	binds, _ := appBinds(s, "web")
+	if len(binds) != 1 || binds[0] != "hakobu-vol-web_data:/app/data" {
+		t.Errorf("binds = %v", binds)
 	}
 }

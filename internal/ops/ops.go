@@ -145,6 +145,10 @@ func DeleteApp(s *store.Store, name string) error {
 	if err != nil {
 		return fmt.Errorf("app %q not found: %w", name, err)
 	}
+	vols, err := s.ListVolumes(ctx(), name)
+	if err != nil {
+		return err
+	}
 	if err := removeAppDNS(s, app); err != nil {
 		fmt.Println("failed to delete the DNS record of", app.Domain+":", err)
 	}
@@ -158,6 +162,11 @@ func DeleteApp(s *store.Store, name string) error {
 		}
 	}
 	removeAppImages(app.Name)
+	for _, v := range vols {
+		if err := deploy.RemoveVolume(ctx(), dockerVolume(name, v.Name)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

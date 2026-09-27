@@ -104,17 +104,17 @@ func runContainer(ctx context.Context, name string, spec map[string]any, hostCon
 
 // RunAppContainer starts an app container with no host port published; the
 // in-process proxy reaches it by its network IP.
-func RunAppContainer(ctx context.Context, imageTag, name string, env []string) (string, error) {
-	return runContainer(ctx, name, map[string]any{"Image": imageTag, "Env": env}, map[string]any{})
+func RunAppContainer(ctx context.Context, imageTag, name string, env, binds []string) (string, error) {
+	return runContainer(ctx, name, map[string]any{"Image": imageTag, "Env": env}, map[string]any{"Binds": binds})
 }
 
 // RunWorkerContainer starts a worker from the app's image with a shell command.
-func RunWorkerContainer(ctx context.Context, imageTag, name, command string, env []string) (string, error) {
+func RunWorkerContainer(ctx context.Context, imageTag, name, command string, env, binds []string) (string, error) {
 	spec := map[string]any{"Image": imageTag, "Env": env}
 	if command != "" {
 		spec["Cmd"] = []string{"sh", "-c", command}
 	}
-	return runContainer(ctx, name, spec, map[string]any{})
+	return runContainer(ctx, name, spec, map[string]any{"Binds": binds})
 }
 
 // RunServiceContainer starts a hakobu-managed backing service (Postgres,
@@ -126,6 +126,58 @@ func RunServiceContainer(ctx context.Context, name, image string, env []string, 
 	return runContainer(ctx, name, map[string]any{"Image": image, "Env": env}, map[string]any{
 		"Binds": []string{name + "_data:" + mountPath},
 	})
+}
+
+// StopContainer stops a container but keeps it, so it can be started again;
+// a no-op if it doesn't exist or isn't running.
+func StopContainer(ctx context.Context, name string) error {
+	respBody, status, err := dockerRequest(ctx, "POST", "/containers/"+url.PathEscape(name)+"/stop?t=10", nil)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusNoContent, http.StatusNotModified, http.StatusNotFound:
+		return nil
+	}
+	return fmt.Errorf("failed to stop container %s (%d): %s", name, status, respBody)
+}
+
+// RemoveVolume deletes a volume; in-use and missing volumes are left alone.
+func RemoveVolume(ctx context.Context, name string) error {
+	respBody, status, err := dockerRequest(ctx, "DELETE", "/volumes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusNoContent, http.StatusNotFound, http.StatusConflict:
+		return nil
+	}
+	return fmt.Errorf("failed to remove volume %s (%d): %s", name, status, respBody)
+}
+
+// VolumeNames lists volumes whose name starts with prefix.
+func VolumeNames(ctx context.Context, prefix string) ([]string, error) {
+	filters, _ := json.Marshal(map[string][]string{"name": {prefix}})
+	respBody, status, err := dockerRequest(ctx, "GET", "/volumes?filters="+url.QueryEscape(string(filters)), nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("volume list failed (%d): %s", status, respBody)
+	}
+	var res struct {
+		Volumes []struct{ Name string } `json:"Volumes"`
+	}
+	if err := json.Unmarshal(respBody, &res); err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, v := range res.Volumes {
+		if strings.HasPrefix(v.Name, prefix) { // the filter matches substrings
+			names = append(names, v.Name)
+		}
+	}
+	return names, nil
 }
 
 // RemoveContainer force-removes a container; a no-op if it doesn't exist.

@@ -37,8 +37,8 @@ func LastCleanup() string {
 	return lastCleanup
 }
 
-// Cleanup frees disk: build cache unused for a week, and images and clones
-// left over from apps that no longer exist.
+// Cleanup frees disk: build cache unused for a week, and images, clones and
+// volumes left over from apps or volumes that no longer exist.
 func Cleanup(s *store.Store) error {
 	result, err := cleanup(s)
 	if err != nil {
@@ -78,6 +78,10 @@ func cleanup(s *store.Store) (string, error) {
 				os.RemoveAll(workDir(c.Name()))
 			}
 		}
+	}
+
+	if err := removeOrphanVolumes(s); err != nil {
+		return "", err
 	}
 
 	freed, err := deploy.PruneBuildCache(ctx(), buildCacheKeep)

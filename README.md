@@ -6,6 +6,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Projects** group apps, PostgreSQL databases, S3 storages and shared variables.
 - **Apps** come from GitHub repos, built with a Dockerfile or [Railpack](https://railpack.com) (auto-detected).
 - **Zero-downtime deploys** with blue/green containers behind an in-process proxy, plus one-click rollback.
+- **Volumes**: directories that survive redeploys; an app with volumes is restarted on deploy (a few seconds of downtime) unless you let both versions share them.
 - **Databases** live in one shared Postgres container, each with its own role; optional daily backups to a storage.
 - **Storages**: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.

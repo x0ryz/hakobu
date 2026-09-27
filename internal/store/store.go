@@ -44,7 +44,7 @@ func (w Worker) ContainerName() string {
 	return w.AppName + "-worker"
 }
 
-// DeleteAppCascade removes the app with its worker, deploy logs and telemetry.
+// DeleteAppCascade removes the app with its worker, volumes, deploy logs and telemetry.
 func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -52,7 +52,7 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	}
 	defer tx.Rollback()
 	q := s.WithTx(tx)
-	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
+	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
 		if err := del(ctx, name); err != nil {
 			return err
 		}

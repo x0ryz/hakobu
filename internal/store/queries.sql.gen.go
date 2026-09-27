@@ -9,6 +9,23 @@ import (
 	"context"
 )
 
+const addVolume = `-- name: AddVolume :exec
+
+INSERT INTO volumes (app_name, name, mount_path) VALUES (?, ?, ?)
+`
+
+type AddVolumeParams struct {
+	AppName   string
+	Name      string
+	MountPath string
+}
+
+// Volumes
+func (q *Queries) AddVolume(ctx context.Context, arg AddVolumeParams) error {
+	_, err := q.db.ExecContext(ctx, addVolume, arg.AppName, arg.Name, arg.MountPath)
+	return err
+}
+
 const appsUsingDatabase = `-- name: AppsUsingDatabase :many
 SELECT name FROM apps WHERE linked_db = ? ORDER BY name
 `
@@ -335,6 +352,29 @@ func (q *Queries) DeleteTelemetryOfApp(ctx context.Context, appName string) erro
 	return err
 }
 
+const deleteVolume = `-- name: DeleteVolume :exec
+DELETE FROM volumes WHERE app_name = ? AND name = ?
+`
+
+type DeleteVolumeParams struct {
+	AppName string
+	Name    string
+}
+
+func (q *Queries) DeleteVolume(ctx context.Context, arg DeleteVolumeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteVolume, arg.AppName, arg.Name)
+	return err
+}
+
+const deleteVolumesOfApp = `-- name: DeleteVolumesOfApp :exec
+DELETE FROM volumes WHERE app_name = ?
+`
+
+func (q *Queries) DeleteVolumesOfApp(ctx context.Context, appName string) error {
+	_, err := q.db.ExecContext(ctx, deleteVolumesOfApp, appName)
+	return err
+}
+
 const deleteWorker = `-- name: DeleteWorker :exec
 DELETE FROM workers WHERE app_name = ?
 `
@@ -365,7 +405,7 @@ func (q *Queries) GetAccessControl(ctx context.Context) (AccessControl, error) {
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view WHERE name = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE name = ?
 `
 
 func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
@@ -391,12 +431,13 @@ func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
 		&i.HealthCheckPath,
 		&i.LinkedDB,
 		&i.LinkedStorage,
+		&i.ShareVolumes,
 	)
 	return i, err
 }
 
 const getAppByDomain = `-- name: GetAppByDomain :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view WHERE domain = ? AND domain != ''
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE domain = ? AND domain != ''
 `
 
 func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error) {
@@ -422,12 +463,13 @@ func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error
 		&i.HealthCheckPath,
 		&i.LinkedDB,
 		&i.LinkedStorage,
+		&i.ShareVolumes,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view WHERE id = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE id = ?
 `
 
 func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
@@ -453,6 +495,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 		&i.HealthCheckPath,
 		&i.LinkedDB,
 		&i.LinkedStorage,
+		&i.ShareVolumes,
 	)
 	return i, err
 }
@@ -586,8 +629,35 @@ func (q *Queries) GetWorker(ctx context.Context, appName string) (Worker, error)
 	return i, err
 }
 
+const listAllVolumes = `-- name: ListAllVolumes :many
+SELECT app_name, name, mount_path FROM volumes
+`
+
+func (q *Queries) ListAllVolumes(ctx context.Context) ([]Volume, error) {
+	rows, err := q.db.QueryContext(ctx, listAllVolumes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Volume
+	for rows.Next() {
+		var i Volume
+		if err := rows.Scan(&i.AppName, &i.Name, &i.MountPath); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApps = `-- name: ListApps :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view ORDER BY name
 `
 
 func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
@@ -619,6 +689,7 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 			&i.HealthCheckPath,
 			&i.LinkedDB,
 			&i.LinkedStorage,
+			&i.ShareVolumes,
 		); err != nil {
 			return nil, err
 		}
@@ -634,7 +705,7 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 }
 
 const listAppsByProject = `-- name: ListAppsByProject :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view WHERE project_id = ? ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE project_id = ? ORDER BY name
 `
 
 func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App, error) {
@@ -666,6 +737,7 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 			&i.HealthCheckPath,
 			&i.LinkedDB,
 			&i.LinkedStorage,
+			&i.ShareVolumes,
 		); err != nil {
 			return nil, err
 		}
@@ -681,7 +753,7 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 }
 
 const listAppsByRepo = `-- name: ListAppsByRepo :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage FROM app_view WHERE repo = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE repo = ?
 `
 
 func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error) {
@@ -713,6 +785,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 			&i.HealthCheckPath,
 			&i.LinkedDB,
 			&i.LinkedStorage,
+			&i.ShareVolumes,
 		); err != nil {
 			return nil, err
 		}
@@ -974,6 +1047,33 @@ func (q *Queries) ListTelemetryEvents(ctx context.Context, arg ListTelemetryEven
 	return items, nil
 }
 
+const listVolumes = `-- name: ListVolumes :many
+SELECT app_name, name, mount_path FROM volumes WHERE app_name = ? ORDER BY name
+`
+
+func (q *Queries) ListVolumes(ctx context.Context, appName string) ([]Volume, error) {
+	rows, err := q.db.QueryContext(ctx, listVolumes, appName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Volume
+	for rows.Next() {
+		var i Volume
+		if err := rows.Scan(&i.AppName, &i.Name, &i.MountPath); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pruneDeployLogs = `-- name: PruneDeployLogs :exec
 DELETE FROM deploy_logs WHERE created_at < ?
 `
@@ -1197,6 +1297,20 @@ type SetAppSettingsParams struct {
 
 func (q *Queries) SetAppSettings(ctx context.Context, arg SetAppSettingsParams) error {
 	_, err := q.db.ExecContext(ctx, setAppSettings, arg.ContainerPort, arg.HealthCheckPath, arg.Name)
+	return err
+}
+
+const setAppShareVolumes = `-- name: SetAppShareVolumes :exec
+UPDATE apps SET share_volumes = ? WHERE name = ?
+`
+
+type SetAppShareVolumesParams struct {
+	ShareVolumes int64
+	Name         string
+}
+
+func (q *Queries) SetAppShareVolumes(ctx context.Context, arg SetAppShareVolumesParams) error {
+	_, err := q.db.ExecContext(ctx, setAppShareVolumes, arg.ShareVolumes, arg.Name)
 	return err
 }
 

@@ -73,6 +73,26 @@ SELECT name FROM apps WHERE linked_storage = ? ORDER BY name;
 -- name: DeleteApp :exec
 DELETE FROM apps WHERE name = ?;
 
+-- name: SetAppShareVolumes :exec
+UPDATE apps SET share_volumes = ? WHERE name = ?;
+
+-- Volumes
+
+-- name: AddVolume :exec
+INSERT INTO volumes (app_name, name, mount_path) VALUES (?, ?, ?);
+
+-- name: ListVolumes :many
+SELECT * FROM volumes WHERE app_name = ? ORDER BY name;
+
+-- name: ListAllVolumes :many
+SELECT * FROM volumes;
+
+-- name: DeleteVolume :exec
+DELETE FROM volumes WHERE app_name = ? AND name = ?;
+
+-- name: DeleteVolumesOfApp :exec
+DELETE FROM volumes WHERE app_name = ?;
+
 -- Workers
 
 -- name: SaveWorker :exec
