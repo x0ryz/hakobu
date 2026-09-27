@@ -55,7 +55,8 @@ func (r *Runner) Named(token string) {
 func logErrors(r io.Reader) {
 	s := bufio.NewScanner(r)
 	for s.Scan() {
-		if line := s.Text(); strings.Contains(line, " ERR ") {
+		// "context canceled" is a visitor closing the page mid-request.
+		if line := s.Text(); strings.Contains(line, " ERR ") && !strings.Contains(line, "context canceled") {
 			fmt.Println("cloudflared:", line)
 		}
 	}
