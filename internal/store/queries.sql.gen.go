@@ -421,17 +421,6 @@ func (q *Queries) FailRunningDeployLogs(ctx context.Context) error {
 	return err
 }
 
-const getAccessControl = `-- name: GetAccessControl :one
-SELECT id, owner_login, allowed_logins FROM access_control WHERE id = 1
-`
-
-func (q *Queries) GetAccessControl(ctx context.Context) (AccessControl, error) {
-	row := q.db.QueryRowContext(ctx, getAccessControl)
-	var i AccessControl
-	err := row.Scan(&i.ID, &i.OwnerLogin, &i.AllowedLogins)
-	return i, err
-}
-
 const getApp = `-- name: GetApp :one
 SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE name = ?
 `
@@ -535,7 +524,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE id = ?
+SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
@@ -544,10 +533,10 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Database,
+		&i.Storage,
 		&i.ObjectKey,
 		&i.SizeBytes,
 		&i.CreatedAt,
-		&i.Storage,
 		&i.VerifiedAt,
 		&i.VerifyError,
 		&i.Tables,
@@ -612,6 +601,17 @@ func (q *Queries) GetGitHubApp(ctx context.Context) (GitHubApp, error) {
 		&i.ClientSecret,
 	)
 	return i, err
+}
+
+const getOwner = `-- name: GetOwner :one
+SELECT github_login FROM owner WHERE id = 1
+`
+
+func (q *Queries) GetOwner(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getOwner)
+	var github_login string
+	err := row.Scan(&github_login)
+	return github_login, err
 }
 
 const getProject = `-- name: GetProject :one
@@ -701,7 +701,7 @@ func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKi
 }
 
 const listAllBackups = `-- name: ListAllBackups :many
-SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
+SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
 `
 
 func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup, error) {
@@ -716,10 +716,10 @@ func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup
 		if err := rows.Scan(
 			&i.ID,
 			&i.Database,
+			&i.Storage,
 			&i.ObjectKey,
 			&i.SizeBytes,
 			&i.CreatedAt,
-			&i.Storage,
 			&i.VerifiedAt,
 			&i.VerifyError,
 			&i.Tables,
@@ -915,7 +915,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
+SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -935,10 +935,10 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 		if err := rows.Scan(
 			&i.ID,
 			&i.Database,
+			&i.Storage,
 			&i.ObjectKey,
 			&i.SizeBytes,
 			&i.CreatedAt,
-			&i.Storage,
 			&i.VerifiedAt,
 			&i.VerifyError,
 			&i.Tables,
@@ -1264,7 +1264,7 @@ type SaveGitHubAppParams struct {
 	ClientSecret  secret.String
 }
 
-// GitHub App and access control
+// GitHub App and the owner
 func (q *Queries) SaveGitHubApp(ctx context.Context, arg SaveGitHubAppParams) error {
 	_, err := q.db.ExecContext(ctx, saveGitHubApp,
 		arg.AppID,
@@ -1298,16 +1298,6 @@ func (q *Queries) SaveWorker(ctx context.Context, arg SaveWorkerParams) error {
 		arg.Command,
 		arg.Env,
 	)
-	return err
-}
-
-const setAllowedLogins = `-- name: SetAllowedLogins :exec
-INSERT INTO access_control (id, allowed_logins) VALUES (1, ?)
-ON CONFLICT(id) DO UPDATE SET allowed_logins = excluded.allowed_logins
-`
-
-func (q *Queries) SetAllowedLogins(ctx context.Context, allowedLogins string) error {
-	_, err := q.db.ExecContext(ctx, setAllowedLogins, allowedLogins)
 	return err
 }
 
@@ -1483,12 +1473,11 @@ func (q *Queries) SetDatabaseBackupStorage(ctx context.Context, arg SetDatabaseB
 }
 
 const setOwner = `-- name: SetOwner :exec
-INSERT INTO access_control (id, owner_login) VALUES (1, ?)
-ON CONFLICT(id) DO UPDATE SET owner_login = excluded.owner_login
+INSERT INTO owner (id, github_login) VALUES (1, ?)
 `
 
-func (q *Queries) SetOwner(ctx context.Context, ownerLogin string) error {
-	_, err := q.db.ExecContext(ctx, setOwner, ownerLogin)
+func (q *Queries) SetOwner(ctx context.Context, githubLogin string) error {
+	_, err := q.db.ExecContext(ctx, setOwner, githubLogin)
 	return err
 }
 

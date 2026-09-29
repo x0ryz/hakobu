@@ -90,11 +90,6 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-# hakobu runs cloudflared in a container; drop the separate unit older installs had.
-if [ -f /etc/systemd/system/hakobu-tunnel.service ]; then
-  systemctl disable --now hakobu-tunnel >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/hakobu-tunnel.service
-fi
 systemctl daemon-reload
 systemctl enable hakobu >/dev/null 2>&1
 systemctl restart hakobu

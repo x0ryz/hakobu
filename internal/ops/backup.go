@@ -29,12 +29,8 @@ func SetBackupStorage(s *store.Store, dbName, storageName string) error {
 
 var errNoStorage = errors.New("the storage no longer exists")
 
-// storageClient returns a client for a backup's storage; "" is the
-// database's current backup storage.
+// storageClient returns a client for the storage a backup is (or goes) in.
 func storageClient(s *store.Store, d store.Database, storage string) (*backup.Client, error) {
-	if storage == "" {
-		storage = d.BackupStorage
-	}
 	if storage == "" {
 		return nil, fmt.Errorf("pick a backup storage for %s first", d.Name)
 	}
@@ -178,7 +174,7 @@ func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	client, err := storageClient(s, d, "")
+	client, err := storageClient(s, d, d.BackupStorage)
 	if err != nil {
 		return 0, err
 	}

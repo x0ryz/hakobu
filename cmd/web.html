@@ -620,6 +620,7 @@ function envEditor(seed, suggestURL) {
   <div class="card">
     <h2 class="h2">Panel</h2>
     <p class="text-sm text-dim">Public URL: <span class="mono">https://{{.PublicHost}}</span></p>
+    <p class="text-sm text-dim">Owner, the only one who can sign in: <span class="mono">{{.Owner}}</span></p>
     {{if .GitHubSlug}}<p class="text-sm text-dim">GitHub App: <a href="https://github.com/apps/{{.GitHubSlug}}" target="_blank" class="underline mono">{{.GitHubSlug}}</a> · <a href="https://github.com/apps/{{.GitHubSlug}}/installations/new" target="_blank" class="underline">manage repository access</a></p>{{end}}
   </div>
   <div class="card">
@@ -630,15 +631,5 @@ function envEditor(seed, suggestURL) {
     <p class="text-sm {{if .DiskLow}}text-bad{{else}}text-dim{{end}}">{{.Disk}}{{if .DiskLow}}: running low, deploys and databases fail on a full disk{{end}}</p>
     <p class="text-xs text-faint">Every day hakobu deletes build cache unused for a week and images of deleted apps; each app keeps only its live image and one for rollback.{{if .LastCleanup}} Last run {{.LastCleanup}}.{{end}}</p>
   </div>
-
-  <form hx-post="/settings/access" class="card">
-    <h2 class="h2">Who can sign in</h2>
-    <p class="text-sm text-dim">Owner: <span class="mono">{{.Owner}}</span></p>
-    <div>
-      <label class="label">Other GitHub usernames, comma-separated</label>
-      <input name="allowed_logins" value="{{.Allowed}}" placeholder="teammate1, teammate2" class="input w-full mono">
-    </div>
-    <button class="btn">Save</button>
-  </form>
 </div>
 {{template "foot"}}{{end}}

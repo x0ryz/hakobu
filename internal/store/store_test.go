@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -77,14 +76,11 @@ func TestStore(t *testing.T) {
 	if err := s.SetOwner(ctx, "me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetAllowedLogins(ctx, " a, ,b "); err != nil {
-		t.Fatal(err)
-	}
 	if owner, _ := s.Owner(ctx); owner != "me" {
 		t.Errorf("Owner = %q", owner)
 	}
-	if allowed, _ := s.AllowedLogins(ctx); len(allowed) != 2 || allowed[0] != "a" || allowed[1] != "b" {
-		t.Errorf("AllowedLogins = %q", allowed)
+	if err := s.SetOwner(ctx, "someone-else"); err == nil {
+		t.Error("the panel can only be claimed once")
 	}
 
 	if err := s.NewSession(ctx, "live", "me", time.Hour); err != nil {
@@ -119,36 +115,6 @@ func TestStore(t *testing.T) {
 	}
 }
 
-// A database created by an older hakobu keeps its data when newer migrations run.
-func TestMigrateFromVersion1(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "hakobu.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v1, _ := migrationFiles.ReadFile("migrations/001_init.sql")
-	for _, q := range []string{string(v1), `PRAGMA user_version = 1`,
-		`INSERT INTO projects (name) VALUES ('demo')`,
-		`INSERT INTO apps (project_id, name, port, container_port) VALUES (1, 'web', 8081, 8000)`} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	db.Close()
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	app, err := s.GetApp(context.Background(), "web")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if app.ContainerPort != 8000 || app.LivePort != 0 || app.ProjectName != "demo" {
-		t.Errorf("migrated app = %+v", app)
-	}
-}
-
 func TestSecretsEncryptedAtRest(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -163,31 +129,22 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 	if err := s.SetProjectSharedEnv(ctx, SetProjectSharedEnvParams{Name: "demo", SharedEnv: "TOKEN=hunter2"}); err != nil {
 		t.Fatal(err)
 	}
-	// A value from before encryption is encrypted on the next Open.
-	if _, err := s.db.Exec(`INSERT INTO projects (name, shared_env) VALUES ('old', 'OLD=plain')`); err != nil {
-		t.Fatal(err)
+	var raw string
+	s.db.QueryRow(`SELECT shared_env FROM projects`).Scan(&raw)
+	if !secret.IsEncrypted(raw) || strings.Contains(raw, "hunter2") {
+		t.Errorf("stored %q, want ciphertext", raw)
 	}
+	// A reopened store (same master key) reads it back.
 	if s, err = Open(path); err != nil {
 		t.Fatal(err)
 	}
-
-	rows, err := s.db.Query(`SELECT name, shared_env FROM projects`)
-	if err != nil {
-		t.Fatal(err)
+	if p, err := s.GetProject(ctx, "demo"); err != nil || p.SharedEnv != "TOKEN=hunter2" {
+		t.Errorf("read %q, %v", p.SharedEnv, err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var name, raw string
-		rows.Scan(&name, &raw)
-		if !secret.IsEncrypted(raw) || strings.Contains(raw, "hunter2") || strings.Contains(raw, "plain") {
-			t.Errorf("%s: stored %q, want ciphertext", name, raw)
-		}
-	}
-	for name, want := range map[string]string{"demo": "TOKEN=hunter2", "old": "OLD=plain"} {
-		p, err := s.GetProject(ctx, name)
-		if err != nil || string(p.SharedEnv) != want {
-			t.Errorf("%s: read %q, %v, want %q", name, p.SharedEnv, err, want)
-		}
+	// A secret column holding something unencrypted is an error, not data.
+	s.db.Exec(`UPDATE projects SET shared_env = 'X=1'`)
+	if _, err := s.GetProject(ctx, "demo"); err == nil {
+		t.Error("plaintext in a secret column was accepted")
 	}
 
 	if err := s.NewSession(ctx, "tok", "me", time.Hour); err != nil {

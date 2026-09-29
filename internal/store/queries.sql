@@ -169,7 +169,7 @@ DELETE FROM backups WHERE id = ?;
 -- name: DeleteBackupsOf :exec
 DELETE FROM backups WHERE database = ?;
 
--- GitHub App and access control
+-- GitHub App and the owner
 
 -- name: SaveGitHubApp :exec
 INSERT OR REPLACE INTO github_app (id, app_id, slug, private_key, webhook_secret, client_id, client_secret)
@@ -178,16 +178,11 @@ VALUES (1, ?, ?, ?, ?, ?, ?);
 -- name: GetGitHubApp :one
 SELECT * FROM github_app WHERE id = 1;
 
--- name: GetAccessControl :one
-SELECT * FROM access_control WHERE id = 1;
+-- name: GetOwner :one
+SELECT github_login FROM owner WHERE id = 1;
 
 -- name: SetOwner :exec
-INSERT INTO access_control (id, owner_login) VALUES (1, ?)
-ON CONFLICT(id) DO UPDATE SET owner_login = excluded.owner_login;
-
--- name: SetAllowedLogins :exec
-INSERT INTO access_control (id, allowed_logins) VALUES (1, ?)
-ON CONFLICT(id) DO UPDATE SET allowed_logins = excluded.allowed_logins;
+INSERT INTO owner (id, github_login) VALUES (1, ?);
 
 -- name: CreateSession :exec
 INSERT INTO sessions (id, github_login, expires_at) VALUES (?, ?, ?);

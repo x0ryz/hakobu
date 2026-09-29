@@ -17,8 +17,7 @@ import (
 	"sync"
 )
 
-// prefix marks an encrypted value; anything without it is plaintext from
-// before encryption and is encrypted by the store at startup.
+// prefix marks an encrypted value and its format.
 const prefix = "enc:v1:"
 
 var (
@@ -123,11 +122,13 @@ func Encrypt(plain string) (string, error) {
 	return prefix + base64.StdEncoding.EncodeToString(a.Seal(nonce, nonce, []byte(plain), nil)), nil
 }
 
-// Decrypt opens a value from Encrypt; plaintext without the prefix is
-// returned as is.
+// Decrypt opens a value from Encrypt.
 func Decrypt(stored string) (string, error) {
+	if stored == "" {
+		return "", nil
+	}
 	if !IsEncrypted(stored) {
-		return stored, nil
+		return "", errors.New("secret: value isn't encrypted")
 	}
 	a, err := cipherOrErr()
 	if err != nil {

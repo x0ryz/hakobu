@@ -38,11 +38,6 @@ func StartTunnel(s *store.Store) error {
 	if err != nil || cf.TunnelToken == "" {
 		return nil
 	}
-	// Tunnels from before cloudflared ran in a container send the panel to
-	// 127.0.0.1, which is the container itself now: route them first.
-	if err := SyncTunnel(s); err != nil {
-		fmt.Println("tunnel routes not updated (retrying):", err)
-	}
 	env, err := deploy.ContainerEnv(ctx(), tunnelContainer)
 	if err != nil {
 		return err
@@ -95,15 +90,6 @@ func SyncTunnel(s *store.Store) error {
 	}
 	applied = key
 	return nil
-}
-
-// EnsureEdge puts the app's live container on the edge network, e.g. one
-// deployed before hakobu routed the tunnel to containers.
-func EnsureEdge(app store.App) error {
-	if st, _ := deploy.ContainerStatus(ctx(), app.ContainerName()); st == "not found" || st == "unknown" {
-		return nil
-	}
-	return deploy.ConnectEdge(ctx(), app.ContainerName(), EdgeAlias(app.Name))
 }
 
 func CloudflareConnected(s *store.Store) bool {

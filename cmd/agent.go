@@ -140,9 +140,9 @@ func ensureSetupToken(s *store.Store) (string, error) {
 	return "https://" + config.PublicHost() + "/setup?token=" + token, nil
 }
 
-// runProxyPoller keeps every app's proxy listening and its live container
-// reachable by the tunnel (after an agent restart this re-attaches them), and
-// retries tunnel route updates that failed.
+// runProxyPoller keeps every app's proxy listening (after an agent restart
+// this re-attaches them to their containers) and retries tunnel route
+// updates that failed.
 func runProxyPoller(s *store.Store) {
 	lastErr := ""
 	for {
@@ -150,9 +150,6 @@ func runProxyPoller(s *store.Store) {
 			for _, a := range apps {
 				if !ops.IsDeploying(a.Name) { // a running job (or deletion) owns the proxy
 					ops.EnsureProxy(a)
-					if err := ops.EnsureEdge(a); err != nil {
-						fmt.Println("edge network:", err)
-					}
 				}
 			}
 		}

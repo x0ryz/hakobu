@@ -14,7 +14,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Storages**: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
-- **Sign-in with GitHub only**; the owner can allow more GitHub users.
+- **Sign-in with GitHub only**, for the owner: the GitHub account that claimed the panel with the setup link.
 - **Cloudflare Tunnel**: panel and apps on your domain with HTTPS, no open ports. cloudflared runs in its own
   container and sends app traffic straight to the app's container, so restarting or upgrading hakobu doesn't take apps down.
 - **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens are encrypted in the SQLite

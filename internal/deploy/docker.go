@@ -636,7 +636,7 @@ func ContainerStatus(ctx context.Context, containerName string) (status string, 
 
 // WatchOOM calls fn for every container the kernel kills for running out of
 // memory, until ctx ends or the event stream breaks. app is the container's
-// AppLabel, "" for containers hakobu didn't label.
+// AppLabel, "" for services such as Postgres.
 func WatchOOM(ctx context.Context, fn func(container, app string)) error {
 	filters, _ := json.Marshal(map[string][]string{"type": {"container"}, "event": {"oom"}})
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/events?filters="+url.QueryEscape(string(filters)), nil)

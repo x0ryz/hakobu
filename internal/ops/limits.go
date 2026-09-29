@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/deploy"
@@ -38,12 +37,6 @@ func oomText(app store.App) string {
 func WatchOOM(s *store.Store) {
 	for {
 		err := deploy.WatchOOM(context.Background(), func(container, appName string) {
-			if appName == "" { // containers from before hakobu labeled them
-				appName = container
-				for _, suffix := range []string{"-blue", "-green", "-worker"} {
-					appName = strings.TrimSuffix(appName, suffix)
-				}
-			}
 			app, err := s.GetApp(ctx(), appName)
 			if err != nil {
 				fmt.Println(container, "was killed: out of memory")

@@ -492,10 +492,9 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 
 	handle("GET /settings", func(w http.ResponseWriter, r *http.Request) {
 		owner, _ := s.Owner(r.Context())
-		allowed, _ := s.AllowedLogins(r.Context())
 		disk, diskLow := ops.DiskUsage()
 		data := map[string]any{
-			"PublicHost": config.PublicHost(), "Owner": owner, "Allowed": strings.Join(allowed, ", "),
+			"PublicHost": config.PublicHost(), "Owner": owner,
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 		}
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
@@ -507,15 +506,11 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	action("POST /settings/cleanup", func(r *http.Request) (string, error) {
 		return "", ops.Cleanup(s)
 	})
-
-	action("POST /settings/access", func(r *http.Request) (string, error) {
-		return "", s.SetAllowedLogins(r.Context(), r.FormValue("allowed_logins"))
-	})
 }
 
 // registerAuthRoutes wires first-run setup and GitHub sign-in. The first
 // person to sign in with the installer's setup link becomes the owner;
-// after that only the owner and the allowlist can sign in.
+// after that only the owner can sign in.
 func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 	setupAllowed := func(r *http.Request) bool {
 		return cookieMatches(r, setupCookie, config.SetupToken())
@@ -722,20 +717,8 @@ func splitDomain(domain string, zones []string) (sub, zone string) {
 	return sub, zone
 }
 
-// mayAccess reports whether a GitHub login is the owner or on the allowlist.
+// mayAccess reports whether a GitHub login is the owner's.
 func mayAccess(ctx context.Context, s *store.Store, login string) bool {
 	owner, err := s.Owner(ctx)
-	if err != nil || owner == "" {
-		return false
-	}
-	if strings.EqualFold(login, owner) {
-		return true
-	}
-	allowed, _ := s.AllowedLogins(ctx)
-	for _, a := range allowed {
-		if strings.EqualFold(login, a) {
-			return true
-		}
-	}
-	return false
+	return err == nil && owner != "" && strings.EqualFold(login, owner)
 }

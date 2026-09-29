@@ -8,12 +8,6 @@ import (
 	"github.com/x0ryz/hakobu/internal/secret"
 )
 
-type AccessControl struct {
-	ID            int64
-	OwnerLogin    string
-	AllowedLogins string
-}
-
 type App struct {
 	ID              int64
 	ProjectID       int64
@@ -45,8 +39,11 @@ type AppRecord struct {
 	Name            string
 	Repo            string
 	Domain          string
+	DnsZoneID       string
+	DnsRecordID     string
 	Port            int64
 	ContainerPort   int64
+	LivePort        int64
 	BuildPath       string
 	BuildStrategy   string
 	ActiveSlot      string
@@ -55,9 +52,6 @@ type AppRecord struct {
 	HealthCheckPath string
 	LinkedDB        string
 	LinkedStorage   string
-	LivePort        int64
-	DnsZoneID       string
-	DnsRecordID     string
 	ShareVolumes    int64
 	MemoryMB        int64
 	Cpus            float64
@@ -66,10 +60,10 @@ type AppRecord struct {
 type Backup struct {
 	ID          int64
 	Database    string
+	Storage     string
 	ObjectKey   string
 	SizeBytes   int64
 	CreatedAt   string
-	Storage     string
 	VerifiedAt  string
 	VerifyError string
 	Tables      int64
@@ -112,6 +106,11 @@ type GitHubApp struct {
 	WebhookSecret secret.String
 	ClientID      string
 	ClientSecret  secret.String
+}
+
+type Owner struct {
+	ID          int64
+	GitHubLogin string
 }
 
 type Project struct {
