@@ -78,6 +78,10 @@ State lives in `data/` (SQLite, its master key, clones); `run/` holds the panel'
 
 Tests that need Docker (they start their own containers) run with `HAKOBU_DOCKER_TEST=1 go test ./...`.
 
+The panel's scripts, styles and fonts are embedded in the binary (`cmd/static/`), so it loads nothing
+from other sites. After changing classes in `cmd/web.html`, rebuild the stylesheet with
+`go generate ./cmd` (needs [bun](https://bun.sh); runs Tailwind 3 with `cmd/tailwind.config.js`).
+
 ### Database changes
 
 - Schema: `internal/store/migrations/NNN_name.sql`, applied in order at startup and tracked in `PRAGMA user_version`. Add a new file for every change, never edit one that has shipped.
@@ -90,7 +94,7 @@ sqlc generate
 
 ## Layout
 
-- `cmd/` — CLI, web panel (`web.go` + `web.html`), GitHub webhook, Sentry ingest
+- `cmd/` — CLI, web panel (`web.go` + `web.html`, assets in `static/`), GitHub webhook, Sentry ingest
 - `internal/ops/` — projects, apps, deploys, databases, storages, backups
 - `internal/deploy/` — Docker Engine API client
 - `internal/proxy/` — per-app reverse proxy on `127.0.0.1:<port>` (private apps, fallback route)

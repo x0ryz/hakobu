@@ -124,3 +124,31 @@ func TestPanelRejectsOtherOrigins(t *testing.T) {
 		t.Errorf("same-origin POST: %d", w.Code)
 	}
 }
+
+func TestStaticFiles(t *testing.T) {
+	var page strings.Builder
+	if err := templates.ExecuteTemplate(&page, "login", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(page.String(), "https://") {
+		t.Error("the login page loads something from another site")
+	}
+	h := staticHandler()
+	for _, name := range []string{"app.css", "app.js", "htmx.min.js", "alpine.min.js"} {
+		u := staticURL(name)
+		if !strings.Contains(page.String(), u) {
+			t.Errorf("page doesn't link %s", u)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", u, nil))
+		if w.Code != http.StatusOK || w.Body.Len() == 0 || !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+			t.Errorf("%s: %d, %d bytes, %q", u, w.Code, w.Body.Len(), w.Header().Get("Cache-Control"))
+		}
+	}
+	// The stylesheet's fonts are embedded too.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/static/fonts/inter.woff2", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("font: %d", w.Code)
+	}
+}

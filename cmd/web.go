@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
-	_ "embed"
+	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -24,9 +26,17 @@ import (
 //go:embed web.html
 var templatesSrc string
 
+// The panel loads nothing from other sites: scripts, styles and fonts are
+// in the binary. Rebuild static/app.css after changing classes in web.html.
+//
+//go:generate bunx --bun tailwindcss@3 -c tailwind.config.js -i styles.css -o static/app.css --minify
+//go:embed static
+var staticFiles embed.FS
+
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"mb":        func(b int64) string { return fmt.Sprintf("%.1f MB", float64(b)/(1<<20)) },
 	"list":      func(items ...string) []string { return items },
+	"static":    staticURL,
 	"publicURL": ops.PublicURL,
 	"dict": func(kv ...any) map[string]any {
 		m := map[string]any{}
@@ -36,6 +46,29 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		return m
 	},
 }).Parse(templatesSrc))
+
+// staticURL links a file in static/ with a hash of its content, so it can
+// be cached for good and a new hakobu still loads its new version.
+func staticURL(name string) string {
+	b, err := staticFiles.ReadFile("static/" + name)
+	if err != nil {
+		panic(err) // a template names a file that isn't embedded
+	}
+	sum := sha256.Sum256(b)
+	return "/static/" + name + "?v=" + hex.EncodeToString(sum[:6])
+}
+
+func staticHandler() http.Handler {
+	files := http.FileServerFS(staticFiles)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("v") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=86400") // fonts, linked from app.css
+		}
+		files.ServeHTTP(w, r)
+	})
+}
 
 // Cookies use the __Host- prefix: apps live on sibling subdomains of the
 // panel, and the prefix stops them from planting cookies for it.
@@ -66,7 +99,11 @@ func panelHandler(mux http.Handler) http.Handler {
 	h := cop.Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		// Only the panel's own files run. Alpine evaluates its x-* attributes
+		// with new Function, hence unsafe-eval; the GitHub App manifest is
+		// posted to github.com.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self' https://github.com; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		h.ServeHTTP(w, r)
@@ -101,6 +138,7 @@ func done(w http.ResponseWriter, redirect string) {
 
 func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	registerAuthRoutes(mux, s)
+	mux.Handle("GET /static/", staticHandler())
 
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -642,7 +680,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /logout", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookie); err == nil {
 			s.EndSession(r.Context(), c.Value)
 		}

@@ -1,0 +1,41 @@
+/* Input for the panel's stylesheet, built into static/app.css by
+   `go generate ./cmd` (Tailwind 3, config in tailwind.config.js). */
+@font-face {
+  font-family: "Inter";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/inter.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono.woff2") format("woff2");
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .card { @apply border border-edge rounded-xl p-5 space-y-4; }
+  .input { @apply bg-white border border-edge rounded-lg px-3 py-1.5 text-sm placeholder-faint outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20; }
+  .btn { @apply inline-flex items-center justify-center text-sm font-medium rounded-lg px-3.5 py-1.5 border border-edge bg-white hover:bg-zinc-50 transition-colors; }
+  .btn-pri { @apply inline-flex items-center justify-center text-sm font-medium rounded-lg px-3.5 py-1.5 bg-ink text-white hover:bg-zinc-700 transition-colors; }
+  .btn-danger { @apply inline-flex items-center justify-center text-sm font-medium rounded-lg px-3.5 py-1.5 border border-bad/30 text-bad hover:bg-red-50 transition-colors; }
+  .link { @apply text-xs text-dim hover:text-ink transition-colors; }
+  .label { @apply block text-xs text-dim mb-1; }
+  .mono { @apply font-mono text-[13px]; }
+  .console { @apply bg-console text-zinc-300 font-mono text-xs rounded-lg p-3 whitespace-pre-wrap overflow-x-auto; }
+  .h2 { @apply text-sm font-semibold; }
+  .row { @apply flex items-center justify-between gap-3 px-4 py-3 border border-edge rounded-xl hover:border-zinc-300 transition-colors; }
+  .tab { @apply pb-2.5 border-b-2 text-sm font-medium shrink-0 transition-colors; }
+}
+
+/* Outside the layers so they are always kept: htmx and Alpine add these
+   classes and attributes at runtime, where Tailwind can't see them. */
+[x-cloak] { display: none !important; }
+.htmx-indicator { display: none; }
+.htmx-request.htmx-indicator { display: block; }
+body { @apply bg-white text-ink antialiased min-h-screen font-sans; }
+.htmx-request.btn, .htmx-request.btn-pri, .htmx-request .btn, .htmx-request .btn-pri, .htmx-request .btn-danger { @apply opacity-50 pointer-events-none; }
