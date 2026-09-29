@@ -29,8 +29,8 @@ func (p *appProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type entry struct {
-	proxy    *appProxy
-	listener net.Listener
+	proxy  *appProxy
+	server *http.Server
 }
 
 var (
@@ -51,8 +51,9 @@ func Ensure(name string, port int64) (isNew bool, err error) {
 		return false, err
 	}
 	p := &appProxy{}
-	registry[name] = &entry{proxy: p, listener: ln}
-	go http.Serve(ln, p)
+	srv := &http.Server{Handler: p}
+	registry[name] = &entry{proxy: p, server: srv}
+	go srv.Serve(ln)
 	return true, nil
 }
 
@@ -74,7 +75,9 @@ func Remove(name string) {
 	e, ok := registry[name]
 	delete(registry, name)
 	mu.Unlock()
+	// Close drops kept-alive connections too: they'd otherwise keep
+	// reaching this app's old container after the port goes to a new app.
 	if ok {
-		e.listener.Close()
+		e.server.Close()
 	}
 }
