@@ -12,8 +12,8 @@ import (
 )
 
 // PostgresContainer is the one shared Postgres service; every database is a
-// logical database + role inside it.
-const PostgresContainer = "hakobu-postgres"
+// logical database + role inside it. Tests run their own.
+var PostgresContainer = "hakobu-postgres"
 
 // ensurePostgres starts the shared service on first use; an existing
 // container is reused, never recreated. The superuser password only

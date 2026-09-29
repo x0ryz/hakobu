@@ -142,7 +142,7 @@ func TestDockerDeploys(t *testing.T) {
 
 	// Rollback goes to v3b, rolling back again returns to v4.
 	for _, want := range []string{"v3b", "v4"} {
-		if err := StartRollback(s, app.Name); err != nil {
+		if err := StartRollback(s, app.Name, false); err != nil {
 			t.Fatal(err)
 		}
 		waitIdle(t, app.Name)
@@ -307,5 +307,138 @@ func TestDockerRustFSStorages(t *testing.T) {
 	}
 	if err := as(files, files); err == nil {
 		t.Error("deleted storage's keys still work")
+	}
+}
+
+// TestDockerDataRollback runs its own Postgres container.
+func TestDockerDataRollback(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	suffix, _ := RandomHex(3)
+	old := PostgresContainer
+	PostgresContainer = "zt-pg-" + suffix
+	t.Cleanup(func() {
+		deploy.RemoveContainer(ctx(), PostgresContainer)
+		deploy.RemoveVolume(ctx(), PostgresContainer+"_data")
+		PostgresContainer = old
+	})
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	os.Chdir(dir) // snapshots go to data/snapshots
+	t.Cleanup(func() { os.Chdir(wd) })
+
+	s, err := store.Open(filepath.Join(dir, "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := newDockerTestApp(t, s)
+	t.Cleanup(func() { DeleteApp(s, app.Name) })
+	if err := CreateDatabase(s, app.ProjectName, "zt"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	if err := LinkDatabase(s, app.Name, "zt"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.GetDatabase(ctx(), "zt"+suffix)
+	sql := func(q string) string {
+		t.Helper()
+		return dockerOut(t, "exec", PostgresContainer, "psql", "-U", d.User, "-d", d.Name, "-Atc", q)
+	}
+	reload := func() store.App { a, _ := s.GetApp(ctx(), app.Name); return a }
+	// StartDeploy's steps after the build.
+	deployVersion := func(v string) {
+		t.Helper()
+		a := reload()
+		buildTestImage(t, nextImageTag(a), v)
+		var out strings.Builder
+		snapshot := takeSnapshot(s, a, &out)
+		if err := rollOut(s, a, nextImageTag(a), &out); err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		if err := promote(a, &out); err != nil {
+			t.Fatal(err)
+		}
+		if err := keepSnapshot(s, a.Name, a.LinkedDB, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rollBack := func(withData bool) {
+		t.Helper()
+		if err := StartRollback(s, app.Name, withData); err != nil {
+			t.Fatal(err)
+		}
+		waitIdle(t, app.Name)
+		logs, _ := s.ListDeployLogs(ctx(), store.ListDeployLogsParams{AppName: app.Name, Limit: 1})
+		if logs[0].Status != "success" {
+			t.Fatalf("rollback failed:\n%s", logs[0].Output)
+		}
+	}
+
+	sql(`CREATE TABLE notes (s text); INSERT INTO notes VALUES ('v1 data')`)
+	deployVersion("v1")
+	// v2's "migration" breaks the data.
+	deployVersion("v2")
+	sql(`DROP TABLE notes; CREATE TABLE notes2 (s text); INSERT INTO notes2 VALUES ('v2 data')`)
+	if reason := DataRollbackBlocker(s, reload()); reason != "" {
+		t.Fatalf("data rollback blocked: %s", reason)
+	}
+
+	// Code and data go back to before v2; the v2 data becomes the snapshot.
+	rollBack(true)
+	expectServing(t, reload(), "v1")
+	if got := sql(`SELECT string_agg(tablename, ',') FROM pg_tables WHERE schemaname = 'public'`); got != "notes" {
+		t.Errorf("tables after data rollback: %q", got)
+	}
+	// And forward again.
+	rollBack(true)
+	expectServing(t, reload(), "v2")
+	if got := sql(`SELECT s FROM notes2`); got != "v2 data" {
+		t.Errorf("data after rolling forward: %q", got)
+	}
+	if got := sql(`SELECT count(*) FROM pg_database WHERE datname LIKE 'hakobu.%'`); got != "0" {
+		t.Errorf("%s scratch databases left", got)
+	}
+
+	// A code-only rollback keeps the data and drops the snapshot, which no
+	// longer matches :previous.
+	rollBack(false)
+	expectServing(t, reload(), "v1")
+	if got := sql(`SELECT s FROM notes2`); got != "v2 data" {
+		t.Errorf("code-only rollback changed the data: %q", got)
+	}
+	if DataRollbackBlocker(s, reload()) == "" {
+		t.Error("data rollback offered without a snapshot")
+	}
+
+	// If the previous version doesn't start, the current data and version
+	// come back.
+	deployVersion("v3")
+	sql(`INSERT INTO notes2 VALUES ('v3 data')`)
+	a := reload()
+	s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/missing"}) // 404 for every version
+	if err := StartRollback(s, a.Name, true); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a.Name)
+	if logs, _ := s.ListDeployLogs(ctx(), store.ListDeployLogsParams{AppName: a.Name, Limit: 1}); logs[0].Status != "failed" || !strings.Contains(logs[0].Output, "put the current data back") {
+		t.Errorf("failed rollback:\n%s", logs[0].Output)
+	}
+	s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/"})
+	expectServing(t, reload(), "v3")
+	if got := sql(`SELECT count(*) FROM notes2`); got != "2" {
+		t.Errorf("rows after a failed data rollback: %s, want 2", got)
+	}
+
+	// A database another app uses too is never rolled back.
+	if err := s.CreateApp(ctx(), store.CreateAppParams{ProjectID: app.ProjectID, Name: app.Name + "-b", BuildStrategy: "dockerfile"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { DeleteApp(s, app.Name+"-b") })
+	if err := LinkDatabase(s, app.Name+"-b", d.Name); err != nil {
+		t.Fatal(err)
+	}
+	if reason := DataRollbackBlocker(s, reload()); !strings.Contains(reason, "other apps") {
+		t.Errorf("shared database: %q", reason)
 	}
 }

@@ -148,11 +148,16 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		if err := build.BuildWithStrategy(dir, next, app.BuildStrategy, out); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
+		snapshot := takeSnapshot(s, app, out)
+		defer os.Remove(snapshot) // kept by keepSnapshot, which moves it
 		if err := rollOut(s, app, next, out); err != nil {
 			return err
 		}
 		if err := promote(app, out); err != nil {
 			return err
+		}
+		if err := keepSnapshot(s, app.Name, app.LinkedDB, snapshot); err != nil {
+			fmt.Fprintln(out, "warning: failed to keep the database snapshot:", err)
 		}
 		if w, err := s.GetWorker(ctx(), app.Name); err == nil {
 			if err := runWorker(s, app, w, out); err != nil {
@@ -202,7 +207,10 @@ func promote(app store.App, out io.Writer) error {
 
 // StartRollback redeploys the image that was live before the current one;
 // the two swap places, so rolling back again returns to where it started.
-func StartRollback(s *store.Store, appName string) error {
+// withData also returns the database to its snapshot from before the last
+// deploy, losing what was written since; the current data becomes the
+// snapshot, so rolling back again returns it too.
+func StartRollback(s *store.Store, appName string, withData bool) error {
 	app, err := s.GetApp(ctx(), appName)
 	if err != nil {
 		return err
@@ -210,10 +218,28 @@ func StartRollback(s *store.Store, appName string) error {
 	if ok, _ := deploy.ImageExists(ctx(), PreviousImageTag(app)); !ok {
 		return fmt.Errorf("no previous build to roll back to")
 	}
-	return startJob(s, appName, "rollback", func(app store.App, out io.Writer) error {
+	if reason := DataRollbackBlocker(s, app); withData && reason != "" {
+		return fmt.Errorf("can't roll back the database: %s", reason)
+	}
+	trigger := "rollback"
+	if withData {
+		trigger = "rollback with data"
+	}
+	return startJob(s, appName, trigger, func(app store.App, out io.Writer) error {
 		prev, latest, swap := PreviousImageTag(app), ImageTag(app), nextImageTag(app)
 		defer deploy.RemoveImage(ctx(), swap)
+		current := ""
+		if withData {
+			var err error
+			if current, err = rollBackData(s, app, out); err != nil {
+				return err
+			}
+			defer os.Remove(current)
+		}
 		if err := rollOut(s, app, prev, out); err != nil {
+			if withData {
+				undoDataRollback(s, app, current, out)
+			}
 			return err
 		}
 		for _, t := range [][2]string{{latest, swap}, {prev, latest}, {swap, prev}} {
@@ -221,11 +247,71 @@ func StartRollback(s *store.Store, appName string) error {
 				return err
 			}
 		}
+		// The snapshot must match the new :previous: the data it ran with,
+		// or nothing after a code-only rollback.
+		if err := keepSnapshot(s, app.Name, app.LinkedDB, current); err != nil {
+			fmt.Fprintln(out, "warning: failed to keep the database snapshot:", err)
+		}
 		if w, err := s.GetWorker(ctx(), app.Name); err == nil {
 			return runWorker(s, app, w, out)
 		}
 		return nil
 	})
+}
+
+// rollBackData saves the current data, stops the app and its worker so
+// nothing writes during the swap, and puts the snapshot in place. It
+// returns the dump of the current data.
+func rollBackData(s *store.Store, app store.App, out io.Writer) (current string, err error) {
+	d, err := s.GetDatabase(ctx(), app.LinkedDB)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintln(out, "saving the current data of", d.Name)
+	if current, err = dumpTo(d); err != nil {
+		return "", fmt.Errorf("couldn't save the current data, nothing changed: %w", err)
+	}
+	fmt.Fprintln(out, "stopping", app.Name, "and restoring", d.Name, "from", app.SnapshotAt)
+	stopApp(app)
+	if err := replaceDatabase(d, snapshotPath(app.Name)); err != nil {
+		os.Remove(current)
+		restartContainer(app, app.ContainerName(), out)
+		restartWorker(s, app, out)
+		return "", fmt.Errorf("restoring the snapshot failed, the data is unchanged: %w", err)
+	}
+	return current, nil
+}
+
+// undoDataRollback puts the saved current data back when the previous
+// version didn't start, then starts the current version again.
+func undoDataRollback(s *store.Store, app store.App, current string, out io.Writer) {
+	stopApp(app) // a recreate deploy may have started it again already
+	d, err := s.GetDatabase(ctx(), app.LinkedDB)
+	if err == nil {
+		err = replaceDatabase(d, current)
+	}
+	if err != nil {
+		keep := filepath.Join(snapshotDir, app.Name+"-before-rollback.sql.gz")
+		os.Rename(current, keep)
+		fmt.Fprintf(out, "ERROR: couldn't put the current data back (%v); it's saved in %s\n", err, keep)
+		return
+	}
+	fmt.Fprintln(out, "put the current data back")
+	restartContainer(app, app.ContainerName(), out)
+	restartWorker(s, app, out)
+}
+
+func stopApp(app store.App) {
+	deploy.StopContainer(ctx(), app.ContainerName())
+	deploy.StopContainer(ctx(), app.Name+"-worker")
+}
+
+func restartWorker(s *store.Store, app store.App, out io.Writer) {
+	if w, err := s.GetWorker(ctx(), app.Name); err == nil {
+		if err := runWorker(s, app, w, out); err != nil {
+			fmt.Fprintln(out, "failed to start the worker again:", err)
+		}
+	}
 }
 
 // rollOut is the blue/green swap: start the inactive slot, health-check it

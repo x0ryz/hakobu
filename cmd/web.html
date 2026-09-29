@@ -282,7 +282,23 @@
     <p class="mono text-faint truncate">{{.App.Repo}}{{if and .App.BuildPath (ne .App.BuildPath ".")}} · {{.App.BuildPath}}{{end}}</p>
   </div>
   <div class="flex gap-2">
-    <button hx-post="/apps/{{.App.Name}}/rollback" hx-confirm="Roll back to the build before the latest one?" class="btn">Rollback</button>
+    <div class="relative" x-data="{open:false}" @click.outside="open=false">
+      <button type="button" @click="open=!open" class="btn">Rollback ▾</button>
+      <div x-show="open" x-cloak class="absolute right-0 z-30 mt-1 w-80 card bg-white shadow-lg p-2 space-y-1">
+        <button hx-post="/apps/{{.App.Name}}/rollback" hx-confirm="Roll back to the build before the latest one? The data stays as it is." class="w-full text-left rounded-lg px-3 py-2 hover:bg-zinc-50">
+          <span class="text-sm font-medium">Code only</span><br><span class="text-xs text-faint">The previous build, with today's data.</span>
+        </button>
+        {{if .App.LinkedDB}}
+        {{if .DataRollbackBlocker}}
+        <div class="px-3 py-2"><span class="text-sm font-medium text-faint">Code and database</span><br><span class="text-xs text-faint">Unavailable: {{.DataRollbackBlocker}}.</span></div>
+        {{else}}
+        <button hx-post="/apps/{{.App.Name}}/rollback" hx-vals='{"data": "1"}' hx-confirm="Roll back the code and return {{.App.LinkedDB}} to its snapshot from {{.App.SnapshotAt}}? Everything written since then is replaced, and the app is down for the swap. Rolling back again returns today's data." class="w-full text-left rounded-lg px-3 py-2 hover:bg-zinc-50">
+          <span class="text-sm font-medium">Code and database</span><br><span class="text-xs text-faint">Also returns <span class="mono">{{.App.LinkedDB}}</span> to its state before the last deploy ({{.App.SnapshotAt}}), e.g. after a bad migration. Newer data is replaced.</span>
+        </button>
+        {{end}}
+        {{end}}
+      </div>
+    </div>
     <button hx-post="/apps/{{.App.Name}}/deploy" class="btn-pri">Redeploy</button>
   </div>
 </div>

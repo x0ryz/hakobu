@@ -20,6 +20,7 @@ sql:
           trigger_source: Trigger
           github_login: GitHubLogin
           memory_mb: MemoryMB
+          snapshot_db: SnapshotDB
         # Secrets are encrypted in the database (internal/secret).
         overrides:
           - column: projects.shared_env

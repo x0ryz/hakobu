@@ -31,6 +31,8 @@ type App struct {
 	ShareVolumes    int64
 	MemoryMB        int64
 	Cpus            float64
+	SnapshotDB      string
+	SnapshotAt      string
 }
 
 type AppRecord struct {
@@ -55,6 +57,8 @@ type AppRecord struct {
 	ShareVolumes    int64
 	MemoryMB        int64
 	Cpus            float64
+	SnapshotDB      string
+	SnapshotAt      string
 }
 
 type Backup struct {

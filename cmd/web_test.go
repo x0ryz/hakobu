@@ -16,7 +16,7 @@ import (
 
 func TestTemplatesRender(t *testing.T) {
 	project := &store.Project{ID: 1, Name: "demo", SharedEnv: "A=1"}
-	app := appView{App: store.App{Name: "web", ProjectName: "demo", Repo: "o/r", Port: 8081, ContainerPort: 8080, Env: "B=2", MemoryMB: 512, Cpus: 0.5}, State: deploy.State{Status: "running", Restarts: 2, OOMKilled: true}}
+	app := appView{App: store.App{Name: "web", ProjectName: "demo", Repo: "o/r", Port: 8081, ContainerPort: 8080, Env: "B=2", LinkedDB: "main", MemoryMB: 512, Cpus: 0.5}, State: deploy.State{Status: "running", Restarts: 2, OOMKilled: true}}
 	worker := &store.Worker{AppName: "web", Name: "worker", Command: "run", Env: "C=3"}
 	db := &store.Database{Name: "main", User: "main_user"}
 	storages := []store.Storage{{Name: "files", Provider: "rustfs", Bucket: "hakobu-files"}}
@@ -28,7 +28,7 @@ func TestTemplatesRender(t *testing.T) {
 		"project": map[string]any{"Project": project, "Apps": []appView{app}, "Databases": []store.Database{*db}, "Storages": storages},
 		"new-app": map[string]any{"Project": "demo", "Repos": []string{"o/r"}, "InstallURL": "https://x", "Zones": []string{"example.com", "other.dev"}, "DefaultZone": "example.com"},
 		"presets": map[string]any{"Presets": []detect.Preset{{Strategy: "dockerfile", Path: ".", Stack: "Python · FastAPI", Port: 8000}, {Strategy: "railpack", Path: "web", Stack: "Node.js"}}},
-		"app":     map[string]any{"App": app, "Zones": []string{"example.com"}, "Sub": "web", "Zone": "example.com", "Project": project, "Databases": []store.Database{*db}, "Storages": storages, "Effective": splitEnv([]string{"A=1"}), "Worker": worker, "WorkerStatus": "running", "Volumes": []store.Volume{{AppName: "web", Name: "data", MountPath: "/app/data"}}, "LastOOM": "2026-09-29T10:00:00Z"},
+		"app":     map[string]any{"App": app, "Zones": []string{"example.com"}, "Sub": "web", "Zone": "example.com", "Project": project, "Databases": []store.Database{*db}, "Storages": storages, "Effective": splitEnv([]string{"A=1"}), "Worker": worker, "WorkerStatus": "running", "Volumes": []store.Volume{{AppName: "web", Name: "data", MountPath: "/app/data"}}, "LastOOM": "2026-09-29T10:00:00Z", "DataRollbackBlocker": "no snapshot"},
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
 		"errors":  []store.TelemetryEvent{{Kind: "error", Message: "boom"}},

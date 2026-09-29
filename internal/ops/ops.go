@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -164,6 +165,7 @@ func DeleteApp(s *store.Store, name string) error {
 		}
 	}
 	removeAppImages(app.Name)
+	os.Remove(snapshotPath(app.Name))
 	for _, v := range vols {
 		if err := deploy.RemoveVolume(ctx(), dockerVolume(name, v.Name)); err != nil {
 			return err

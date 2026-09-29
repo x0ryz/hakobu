@@ -76,6 +76,9 @@ DELETE FROM apps WHERE name = ?;
 -- name: SetAppShareVolumes :exec
 UPDATE apps SET share_volumes = ? WHERE name = ?;
 
+-- name: SetAppSnapshot :exec
+UPDATE apps SET snapshot_db = ?, snapshot_at = ? WHERE name = ?;
+
 -- name: SetAppLimits :exec
 UPDATE apps SET memory_mb = ?, cpus = ? WHERE name = ?;
 

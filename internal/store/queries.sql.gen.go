@@ -395,7 +395,7 @@ func (q *Queries) FailRunningDeployLogs(ctx context.Context) error {
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE name = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view WHERE name = ?
 `
 
 func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
@@ -424,12 +424,14 @@ func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
 		&i.ShareVolumes,
 		&i.MemoryMB,
 		&i.Cpus,
+		&i.SnapshotDB,
+		&i.SnapshotAt,
 	)
 	return i, err
 }
 
 const getAppByDomain = `-- name: GetAppByDomain :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE domain = ? AND domain != ''
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view WHERE domain = ? AND domain != ''
 `
 
 func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error) {
@@ -458,12 +460,14 @@ func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error
 		&i.ShareVolumes,
 		&i.MemoryMB,
 		&i.Cpus,
+		&i.SnapshotDB,
+		&i.SnapshotAt,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE id = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view WHERE id = ?
 `
 
 func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
@@ -492,6 +496,8 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 		&i.ShareVolumes,
 		&i.MemoryMB,
 		&i.Cpus,
+		&i.SnapshotDB,
+		&i.SnapshotAt,
 	)
 	return i, err
 }
@@ -738,7 +744,7 @@ func (q *Queries) ListAllVolumes(ctx context.Context) ([]Volume, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view ORDER BY name
 `
 
 func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
@@ -773,6 +779,8 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 			&i.ShareVolumes,
 			&i.MemoryMB,
 			&i.Cpus,
+			&i.SnapshotDB,
+			&i.SnapshotAt,
 		); err != nil {
 			return nil, err
 		}
@@ -788,7 +796,7 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 }
 
 const listAppsByProject = `-- name: ListAppsByProject :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE project_id = ? ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view WHERE project_id = ? ORDER BY name
 `
 
 func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App, error) {
@@ -823,6 +831,8 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 			&i.ShareVolumes,
 			&i.MemoryMB,
 			&i.Cpus,
+			&i.SnapshotDB,
+			&i.SnapshotAt,
 		); err != nil {
 			return nil, err
 		}
@@ -838,7 +848,7 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 }
 
 const listAppsByRepo = `-- name: ListAppsByRepo :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE repo = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus, snapshot_db, snapshot_at FROM app_view WHERE repo = ?
 `
 
 func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error) {
@@ -873,6 +883,8 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 			&i.ShareVolumes,
 			&i.MemoryMB,
 			&i.Cpus,
+			&i.SnapshotDB,
+			&i.SnapshotAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1405,6 +1417,21 @@ type SetAppShareVolumesParams struct {
 
 func (q *Queries) SetAppShareVolumes(ctx context.Context, arg SetAppShareVolumesParams) error {
 	_, err := q.db.ExecContext(ctx, setAppShareVolumes, arg.ShareVolumes, arg.Name)
+	return err
+}
+
+const setAppSnapshot = `-- name: SetAppSnapshot :exec
+UPDATE apps SET snapshot_db = ?, snapshot_at = ? WHERE name = ?
+`
+
+type SetAppSnapshotParams struct {
+	SnapshotDB string
+	SnapshotAt string
+	Name       string
+}
+
+func (q *Queries) SetAppSnapshot(ctx context.Context, arg SetAppSnapshotParams) error {
+	_, err := q.db.ExecContext(ctx, setAppSnapshot, arg.SnapshotDB, arg.SnapshotAt, arg.Name)
 	return err
 }
 

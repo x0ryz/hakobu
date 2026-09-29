@@ -6,6 +6,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Projects** group apps, PostgreSQL databases, S3 storages and shared variables.
 - **Apps** come from GitHub repos, built with a Dockerfile or [Railpack](https://railpack.com) (auto-detected).
 - **Zero-downtime deploys** with blue/green containers behind an in-process proxy, plus one-click rollback.
+  Before each deploy the app's database is snapshotted on the server, so a rollback can also undo a bad migration.
 - **Volumes**: directories that survive redeploys; an app with volumes is restarted on deploy (a few seconds of downtime) unless you let both versions share them.
 - **Resource limits**: memory and CPU caps per app and worker; out-of-memory kills show up on the app page.
 - **Databases** live in one shared Postgres container, each with its own role. Backups are one click in

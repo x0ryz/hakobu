@@ -308,6 +308,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		data["Sub"], data["Zone"] = splitDomain(app.Domain, data["Zones"].([]string))
 		data["Volumes"], _ = s.ListVolumes(r.Context(), app.Name)
 		data["LastOOM"] = ops.LastOOM(s, app.Name)
+		data["DataRollbackBlocker"] = ops.DataRollbackBlocker(s, app)
 		if w, err := s.GetWorker(r.Context(), app.Name); err == nil {
 			data["Worker"] = w
 			data["WorkerStatus"], _ = deploy.ContainerStatus(r.Context(), w.ContainerName())
@@ -326,7 +327,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /apps/{a}/rollback", func(r *http.Request) (string, error) {
-		return "", ops.StartRollback(s, r.PathValue("a"))
+		return "", ops.StartRollback(s, r.PathValue("a"), r.FormValue("data") != "")
 	})
 
 	action("DELETE /apps/{a}", func(r *http.Request) (string, error) {

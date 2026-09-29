@@ -9,6 +9,9 @@ CREATE TABLE projects (
 -- dns_* is the record hakobu owns for domain. memory_mb/cpus 0: no limit.
 -- An app with volumes deploys by stopping the old version first, unless
 -- share_volumes lets both versions use them during the switch.
+-- snapshot_db/snapshot_at describe data/snapshots/<app>.sql.gz, the dump of
+-- the app's database taken before the deploy of its live image, so Rollback
+-- can return the data together with the :previous image.
 CREATE TABLE apps (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -30,14 +33,17 @@ CREATE TABLE apps (
 	linked_storage TEXT NOT NULL DEFAULT '',
 	share_volumes INTEGER NOT NULL DEFAULT 0,
 	memory_mb INTEGER NOT NULL DEFAULT 0,
-	cpus REAL NOT NULL DEFAULT 0
+	cpus REAL NOT NULL DEFAULT 0,
+	snapshot_db TEXT NOT NULL DEFAULT '',
+	snapshot_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_apps_repo ON apps(repo);
 
 CREATE VIEW app_view AS
 SELECT a.id, a.project_id, p.name AS project_name, a.name, a.repo, a.domain, a.dns_zone_id, a.dns_record_id,
 	a.port, a.container_port, a.live_port, a.build_path, a.build_strategy, a.active_slot, a.env, a.sentry_key,
-	a.health_check_path, a.linked_db, a.linked_storage, a.share_volumes, a.memory_mb, a.cpus
+	a.health_check_path, a.linked_db, a.linked_storage, a.share_volumes, a.memory_mb, a.cpus,
+	a.snapshot_db, a.snapshot_at
 FROM apps a JOIN projects p ON p.id = a.project_id;
 
 CREATE TABLE workers (

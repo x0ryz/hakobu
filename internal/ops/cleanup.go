@@ -3,6 +3,7 @@ package ops
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,19 @@ func cleanup(s *store.Store) (string, error) {
 		for _, c := range clones {
 			if !IsDeploying(c.Name()) {
 				os.RemoveAll(workDir(c.Name()))
+			}
+		}
+	}
+
+	// Snapshots of deleted apps, and dumps left by interrupted jobs; a data
+	// copy saved by a failed rollback stays until someone deals with it.
+	if snaps, err := os.ReadDir(snapshotDir); err == nil {
+		for _, f := range snaps {
+			name, isSnapshot := strings.CutSuffix(f.Name(), ".sql.gz")
+			info, err := f.Info()
+			stale := err == nil && time.Since(info.ModTime()) > 24*time.Hour
+			if (isSnapshot && !exists[name] && !strings.HasSuffix(name, "-before-rollback")) || (strings.HasSuffix(f.Name(), ".tmp") && stale) {
+				os.Remove(filepath.Join(snapshotDir, f.Name()))
 			}
 		}
 	}
