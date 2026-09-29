@@ -113,13 +113,13 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) error {
 
 const createBackup = `-- name: CreateBackup :one
 
-INSERT INTO backups (database, storage, object_key, size_bytes) VALUES (?, ?, ?, ?) RETURNING id
+INSERT INTO backups (database, object_key, parts, size_bytes) VALUES (?, ?, ?, ?) RETURNING id
 `
 
 type CreateBackupParams struct {
 	Database  string
-	Storage   string
 	ObjectKey string
+	Parts     int64
 	SizeBytes int64
 }
 
@@ -127,8 +127,8 @@ type CreateBackupParams struct {
 func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, createBackup,
 		arg.Database,
-		arg.Storage,
 		arg.ObjectKey,
+		arg.Parts,
 		arg.SizeBytes,
 	)
 	var id int64
@@ -261,33 +261,6 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 		arg.Payload,
 	)
 	return err
-}
-
-const databasesBackingUpTo = `-- name: DatabasesBackingUpTo :many
-SELECT name FROM databases WHERE backup_storage = ? ORDER BY name
-`
-
-func (q *Queries) DatabasesBackingUpTo(ctx context.Context, backupStorage string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, databasesBackingUpTo, backupStorage)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		items = append(items, name)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const deleteApp = `-- name: DeleteApp :exec
@@ -524,7 +497,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
+SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
@@ -533,8 +506,8 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Database,
-		&i.Storage,
 		&i.ObjectKey,
+		&i.Parts,
 		&i.SizeBytes,
 		&i.CreatedAt,
 		&i.VerifiedAt,
@@ -546,7 +519,7 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 
 const getCloudflare = `-- name: GetCloudflare :one
 
-SELECT id, access_token, refresh_token, expires_at, account_id, tunnel_id, tunnel_token, panel_zone_id, panel_record_id FROM cloudflare WHERE id = 1
+SELECT id, access_token, refresh_token, expires_at, account_id, tunnel_id, tunnel_token, panel_zone_id, panel_record_id, backup_bucket FROM cloudflare WHERE id = 1
 `
 
 // Cloudflare
@@ -563,12 +536,13 @@ func (q *Queries) GetCloudflare(ctx context.Context) (Cloudflare, error) {
 		&i.TunnelToken,
 		&i.PanelZoneID,
 		&i.PanelRecordID,
+		&i.BackupBucket,
 	)
 	return i, err
 }
 
 const getDatabase = `-- name: GetDatabase :one
-SELECT name, project_id, db_user, db_password, backup_storage FROM databases WHERE name = ?
+SELECT name, project_id, db_user, db_password FROM databases WHERE name = ?
 `
 
 func (q *Queries) GetDatabase(ctx context.Context, name string) (Database, error) {
@@ -579,7 +553,6 @@ func (q *Queries) GetDatabase(ctx context.Context, name string) (Database, error
 		&i.ProjectID,
 		&i.User,
 		&i.Password,
-		&i.BackupStorage,
 	)
 	return i, err
 }
@@ -701,7 +674,7 @@ func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKi
 }
 
 const listAllBackups = `-- name: ListAllBackups :many
-SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
+SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
 `
 
 func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup, error) {
@@ -716,8 +689,8 @@ func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup
 		if err := rows.Scan(
 			&i.ID,
 			&i.Database,
-			&i.Storage,
 			&i.ObjectKey,
+			&i.Parts,
 			&i.SizeBytes,
 			&i.CreatedAt,
 			&i.VerifiedAt,
@@ -915,7 +888,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, "database", storage, object_key, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
+SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -935,8 +908,8 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 		if err := rows.Scan(
 			&i.ID,
 			&i.Database,
-			&i.Storage,
 			&i.ObjectKey,
+			&i.Parts,
 			&i.SizeBytes,
 			&i.CreatedAt,
 			&i.VerifiedAt,
@@ -957,7 +930,7 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 }
 
 const listDatabases = `-- name: ListDatabases :many
-SELECT name, project_id, db_user, db_password, backup_storage FROM databases ORDER BY name
+SELECT name, project_id, db_user, db_password FROM databases ORDER BY name
 `
 
 func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
@@ -974,7 +947,6 @@ func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
 			&i.ProjectID,
 			&i.User,
 			&i.Password,
-			&i.BackupStorage,
 		); err != nil {
 			return nil, err
 		}
@@ -990,7 +962,7 @@ func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
 }
 
 const listDatabasesByProject = `-- name: ListDatabasesByProject :many
-SELECT name, project_id, db_user, db_password, backup_storage FROM databases WHERE project_id = ? ORDER BY name
+SELECT name, project_id, db_user, db_password FROM databases WHERE project_id = ? ORDER BY name
 `
 
 func (q *Queries) ListDatabasesByProject(ctx context.Context, projectID int64) ([]Database, error) {
@@ -1007,7 +979,6 @@ func (q *Queries) ListDatabasesByProject(ctx context.Context, projectID int64) (
 			&i.ProjectID,
 			&i.User,
 			&i.Password,
-			&i.BackupStorage,
 		); err != nil {
 			return nil, err
 		}
@@ -1437,6 +1408,15 @@ func (q *Queries) SetAppShareVolumes(ctx context.Context, arg SetAppShareVolumes
 	return err
 }
 
+const setBackupBucket = `-- name: SetBackupBucket :exec
+UPDATE cloudflare SET backup_bucket = ? WHERE id = 1
+`
+
+func (q *Queries) SetBackupBucket(ctx context.Context, backupBucket string) error {
+	_, err := q.db.ExecContext(ctx, setBackupBucket, backupBucket)
+	return err
+}
+
 const setBackupVerified = `-- name: SetBackupVerified :exec
 UPDATE backups SET verified_at = ?, verify_error = ?, tables = ? WHERE id = ?
 `
@@ -1455,20 +1435,6 @@ func (q *Queries) SetBackupVerified(ctx context.Context, arg SetBackupVerifiedPa
 		arg.Tables,
 		arg.ID,
 	)
-	return err
-}
-
-const setDatabaseBackupStorage = `-- name: SetDatabaseBackupStorage :exec
-UPDATE databases SET backup_storage = ? WHERE name = ?
-`
-
-type SetDatabaseBackupStorageParams struct {
-	BackupStorage string
-	Name          string
-}
-
-func (q *Queries) SetDatabaseBackupStorage(ctx context.Context, arg SetDatabaseBackupStorageParams) error {
-	_, err := q.db.ExecContext(ctx, setDatabaseBackupStorage, arg.BackupStorage, arg.Name)
 	return err
 }
 

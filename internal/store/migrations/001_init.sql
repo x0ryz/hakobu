@@ -59,8 +59,7 @@ CREATE TABLE databases (
 	name TEXT PRIMARY KEY,
 	project_id INTEGER NOT NULL REFERENCES projects(id),
 	db_user TEXT NOT NULL,
-	db_password TEXT NOT NULL,
-	backup_storage TEXT NOT NULL DEFAULT ''
+	db_password TEXT NOT NULL
 );
 
 CREATE TABLE storages (
@@ -75,14 +74,15 @@ CREATE TABLE storages (
 	region TEXT NOT NULL DEFAULT 'auto'
 );
 
--- storage is where the backup was uploaded. The check restores it into a
--- scratch database: verified_at '' means not checked yet, verify_error ''
--- means it restored.
+-- A backup is the files <object_key>/000, /001, ... in the R2 backup bucket
+-- (one upload is capped at 300 MB). The check restores it into a scratch
+-- database: verified_at '' means not checked yet, verify_error '' means it
+-- restored.
 CREATE TABLE backups (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	database TEXT NOT NULL,
-	storage TEXT NOT NULL,
 	object_key TEXT NOT NULL,
+	parts INTEGER NOT NULL,
 	size_bytes INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 	verified_at TEXT NOT NULL DEFAULT '',
@@ -134,7 +134,8 @@ CREATE TABLE telemetry_events (
 );
 
 -- The Cloudflare account connected through OAuth, the tunnel hakobu created
--- in it, and the DNS record of the panel.
+-- in it, the DNS record of the panel and the R2 bucket for database
+-- backups ('' until backups are set up).
 CREATE TABLE cloudflare (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	access_token TEXT NOT NULL,
@@ -144,5 +145,6 @@ CREATE TABLE cloudflare (
 	tunnel_id TEXT NOT NULL DEFAULT '',
 	tunnel_token TEXT NOT NULL DEFAULT '',
 	panel_zone_id TEXT NOT NULL DEFAULT '',
-	panel_record_id TEXT NOT NULL DEFAULT ''
+	panel_record_id TEXT NOT NULL DEFAULT '',
+	backup_bucket TEXT NOT NULL DEFAULT ''
 );

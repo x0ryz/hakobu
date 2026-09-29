@@ -8,10 +8,12 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Zero-downtime deploys** with blue/green containers behind an in-process proxy, plus one-click rollback.
 - **Volumes**: directories that survive redeploys; an app with volumes is restarted on deploy (a few seconds of downtime) unless you let both versions share them.
 - **Resource limits**: memory and CPU caps per app and worker; out-of-memory kills show up on the app page.
-- **Databases** live in one shared Postgres container, each with its own role; optional daily backups to a storage.
-  Each backup is test-restored into a temporary database right after upload, old ones are rotated
-  (the last 7, one a week for a month), and dumps are streamed, so large databases don't need the memory.
-- **Storages**: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
+- **Databases** live in one shared Postgres container, each with its own role. Backups are one click in
+  Settings: hakobu creates a private R2 bucket in your Cloudflare account and backs up every database daily.
+  No S3 keys exist for it (hakobu writes with its Cloudflare sign-in), and the bucket's lock keeps each backup
+  for 7 days even from hakobu. Each backup is test-restored into a temporary database right after upload,
+  and old ones are rotated (the last 7, one a week for a month).
+- **Storages** for your apps' files: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
 - **Sign-in with GitHub only**, for the owner: the GitHub account that claimed the panel with the setup link.
@@ -32,7 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo
 ```
 
 1. The installer shows a Cloudflare link: sign in and select **Authorize**. Hakobu gets
-   permission to read your domains, manage their DNS records and create a tunnel.
+   permission to read your domains, manage their DNS records, create a tunnel and keep
+   database backups in R2.
    Nothing to copy: the terminal continues on its own.
 2. Pick one of your domains from the list and the panel's subdomain (default `hakobu`).
    Hakobu creates the tunnel and a DNS record for the panel.
@@ -92,13 +95,14 @@ sqlc generate
 - `internal/deploy/` — Docker Engine API client
 - `internal/proxy/` — per-app reverse proxy on `127.0.0.1:<port>` (private apps, fallback route)
 - `internal/edge/` — the panel's router: the panel, or an app the tunnel has no route for yet
-- `internal/cloudflare/` — Cloudflare OAuth + API (the tunnel's routes, DNS records)
+- `internal/cloudflare/` — Cloudflare OAuth + API (the tunnel's routes, DNS records, R2 backups)
 - `relay/` — Cloudflare Worker for the OAuth callback
 - `internal/build/`, `internal/detect/` — cloning and building repos
 - `internal/github/` — GitHub App, OAuth
 - `internal/store/` — SQLite: migrations, sqlc queries
 - `internal/secret/` — encryption of secrets in the database
-- `internal/backup/` — streaming pg_dump/restore, S3 client
+- `internal/backup/` — streaming pg_dump/restore
+- `internal/s3/` — creating RustFS buckets
 
 ## License
 

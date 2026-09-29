@@ -60,8 +60,8 @@ type AppRecord struct {
 type Backup struct {
 	ID          int64
 	Database    string
-	Storage     string
 	ObjectKey   string
+	Parts       int64
 	SizeBytes   int64
 	CreatedAt   string
 	VerifiedAt  string
@@ -79,14 +79,14 @@ type Cloudflare struct {
 	TunnelToken   secret.String
 	PanelZoneID   string
 	PanelRecordID string
+	BackupBucket  string
 }
 
 type Database struct {
-	Name          string
-	ProjectID     int64
-	User          string
-	Password      secret.String
-	BackupStorage string
+	Name      string
+	ProjectID int64
+	User      string
+	Password  secret.String
 }
 
 type DeployLog struct {

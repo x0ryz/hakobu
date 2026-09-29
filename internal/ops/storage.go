@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/x0ryz/hakobu/internal/backup"
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/s3"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
@@ -97,7 +97,7 @@ func provisionRustFS(st *store.Storage) error {
 
 // hostClient returns an S3 client usable from the agent process. RustFS is
 // only reachable by container name inside docker, so it goes via its IP.
-func hostClient(st store.Storage) (*backup.Client, error) {
+func hostClient(st store.Storage) (*s3.Client, error) {
 	if st.Provider == "rustfs" {
 		ip, err := deploy.ContainerIP(ctx(), rustfsContainer)
 		if err != nil {
@@ -105,7 +105,7 @@ func hostClient(st store.Storage) (*backup.Client, error) {
 		}
 		st.Endpoint = "http://" + ip + ":" + rustfsPort
 	}
-	return backup.NewClient(st), nil
+	return s3.NewClient(st), nil
 }
 
 func DeleteStorage(s *store.Store, name string) error {
@@ -115,13 +115,6 @@ func DeleteStorage(s *store.Store, name string) error {
 	}
 	if len(apps) > 0 {
 		return fmt.Errorf("storage %s is still used by %s — unlink it first", name, strings.Join(apps, ", "))
-	}
-	dbs, err := s.DatabasesBackingUpTo(ctx(), name)
-	if err != nil {
-		return err
-	}
-	if len(dbs) > 0 {
-		return fmt.Errorf("storage %s holds backups of %s — pick another backup storage first", name, strings.Join(dbs, ", "))
 	}
 	return s.DeleteStorage(ctx(), name)
 }
@@ -141,5 +134,5 @@ func storageEnv(st store.Storage) []string {
 	if st.Provider == "r2" {
 		env = append(env, "R2_ACCOUNT_ID="+st.AccountID)
 	}
-	return append(env, "S3_ENDPOINT="+backup.Endpoint(st))
+	return append(env, "S3_ENDPOINT="+s3.Endpoint(st))
 }

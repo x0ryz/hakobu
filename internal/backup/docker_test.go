@@ -3,8 +3,6 @@ package backup
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"io"
 	"os"
 	"os/exec"
@@ -12,30 +10,19 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/x0ryz/hakobu/internal/secret"
-	"github.com/x0ryz/hakobu/internal/store"
 )
 
-// TestDockerBackup runs its own Postgres and RustFS containers:
+// TestDockerBackup runs its own Postgres container:
 // HAKOBU_DOCKER_TEST=1 go test ./internal/backup -run Docker -v
 func TestDockerBackup(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
 	}
 	ctx := context.Background()
-	pg, fs := "zt-backup-pg", "zt-backup-rustfs"
-	for _, c := range []string{pg, fs} {
-		exec.Command("docker", "rm", "-f", c).Run()
-		t.Cleanup(func() { exec.Command("docker", "rm", "-f", c).Run() })
-	}
+	pg := "zt-backup-pg"
+	exec.Command("docker", "rm", "-f", pg).Run()
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", pg).Run() })
 	docker(t, "run", "-d", "--name", pg, "-e", "POSTGRES_PASSWORD=x", "postgres:18")
-	docker(t, "run", "-d", "--name", fs, "-e", "RUSTFS_ACCESS_KEY=ztaccess", "-e", "RUSTFS_SECRET_KEY=ztsecret123",
-		"-e", "RUSTFS_ADDRESS=:9000", "-e", "RUSTFS_CONSOLE_ENABLE=false", "rustfs/rustfs:latest")
-
-	ip := docker(t, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", fs)
-	client := NewClient(store.Storage{Endpoint: "http://" + ip + ":9000", Bucket: "zt-backup", AccessKeyID: "ztaccess", SecretAccessKey: secret.String("ztsecret123")})
-	waitFor(t, func() bool { return client.CreateBucket() == nil }) // 503 until RustFS is up
 	waitFor(t, func() bool {
 		return exec.Command("docker", "exec", pg, "pg_isready", "-h", "127.0.0.1", "-U", "postgres").Run() == nil
 	})
@@ -46,7 +33,7 @@ func TestDockerBackup(t *testing.T) {
 	}
 	docker(t, "exec", pg, "psql", "-U", "app", "-d", "main", "-c", `CREATE TABLE a (n int); CREATE TABLE b (s text); INSERT INTO a SELECT generate_series(1, 1000)`)
 
-	// Dump through a file, upload, download, restore elsewhere.
+	// Dump through a file, restore elsewhere.
 	f, err := os.Create(filepath.Join(t.TempDir(), "dump.sql.gz"))
 	if err != nil {
 		t.Fatal(err)
@@ -54,17 +41,10 @@ func TestDockerBackup(t *testing.T) {
 	if err := DumpDatabase(ctx, pg, "app", "main", f); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.PutFile("backups/main/1.sql.gz", f, "application/gzip"); err != nil {
+	f.Seek(0, io.SeekStart)
+	if err := RestoreDatabase(ctx, pg, "app", "copy", f); err != nil {
 		t.Fatal(err)
 	}
-	body, err := client.GetStream("backups/main/1.sql.gz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := RestoreDatabase(ctx, pg, "app", "copy", body); err != nil {
-		t.Fatal(err)
-	}
-	body.Close()
 	if n, err := CountTables(ctx, pg, "app", "copy"); err != nil || n != 2 {
 		t.Errorf("restored %d tables, %v", n, err)
 	}
@@ -78,37 +58,6 @@ func TestDockerBackup(t *testing.T) {
 	}
 	if n, _ := CountTables(ctx, pg, "app", "copy"); n != 2 {
 		t.Errorf("a failed restore left %d tables, want 2", n)
-	}
-
-	// Files over partSize go up in parts and come back identical.
-	big, err := os.Create(filepath.Join(t.TempDir(), "big"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := sha256.New()
-	if _, err := io.CopyN(io.MultiWriter(big, want), rand.Reader, partSize+partSize/2); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.PutFile("big", big, ""); err != nil {
-		t.Fatal(err)
-	}
-	body, err = client.GetStream("big")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := sha256.New()
-	io.Copy(got, body)
-	body.Close()
-	if !bytes.Equal(got.Sum(nil), want.Sum(nil)) {
-		t.Error("multipart upload came back different")
-	}
-	for _, key := range []string{"big", "backups/main/1.sql.gz"} {
-		if err := client.DeleteObject(key); err != nil {
-			t.Error(err)
-		}
-	}
-	if _, err := client.GetStream("big"); err == nil {
-		t.Error("deleted object still there")
 	}
 }
 

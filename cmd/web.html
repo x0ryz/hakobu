@@ -578,18 +578,10 @@ function envEditor(seed, suggestURL) {
   <div id="backups" class="card" {{if .Job.Running}}hx-get="/databases/{{.DB.Name}}" hx-trigger="every 3s" hx-select="#backups" hx-swap="outerHTML"{{end}}>
     <div class="flex items-center justify-between">
       <h2 class="h2">Backups</h2>
-      {{if .DB.BackupStorage}}<button hx-post="/databases/{{.DB.Name}}/backups" class="btn" {{if .Job.Running}}disabled{{end}}>Back up now</button>{{end}}
+      {{if .BackupBucket}}<button hx-post="/databases/{{.DB.Name}}/backups" class="btn" {{if .Job.Running}}disabled{{end}}>Back up now</button>{{end}}
     </div>
-    <form hx-post="/databases/{{.DB.Name}}/backup-storage" class="flex gap-2 items-center">
-      <select name="storage" class="input flex-1">
-        <option value="">no backups</option>
-        {{range .Storages}}<option value="{{.Name}}" {{if eq .Name $.DB.BackupStorage}}selected{{end}}>daily to {{.Name}} ({{.Provider}} · {{.Bucket}}){{if eq .Provider "rustfs"}} · same server{{end}}</option>{{end}}
-      </select>
-      <button class="btn">Save</button>
-    </form>
-    {{if not .Storages}}<p class="text-xs text-faint">Add a storage to the project to enable backups.</p>{{end}}
-    {{if .SameServer}}<p class="text-sm text-warn">These backups are stored on this same server (RustFS). They help against a bad migration or a deleted table, but a failed disk or a lost server takes the database and its backups together. Use Cloudflare R2 or another S3 storage for real backups.</p>{{end}}
-    {{if .DB.BackupStorage}}<p class="text-xs text-faint">Each backup is restored into a temporary database right after upload to prove it works (it needs as much free disk as the database). Hakobu keeps the last {{.Keep}} backups, one a week for four weeks, and always the newest one that restored.</p>{{end}}
+    {{if .BackupBucket}}<p class="text-xs text-faint">Backed up daily to R2 (<span class="mono">{{.BackupBucket}}</span>). Each backup is restored into a temporary database right after upload to prove it works (it needs as much free disk as the database). Hakobu keeps the last {{.Keep}} backups, one a week for four weeks, and always the newest one that restored; none can be deleted in its first 7 days.</p>
+    {{else}}<p class="text-sm text-dim">Backups aren't set up yet: <a href="/settings" class="underline">turn them on in Settings</a>, one click for all databases.</p>{{end}}
     {{with .Job}}
     {{if .Running}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> {{$.DB.Name}} is {{.Running}}…</p>
     {{else if .Last}}<p class="text-xs {{if .Failed}}text-bad{{else}}text-faint{{end}}">Last: {{.Last}}</p>{{end}}
@@ -623,6 +615,18 @@ function envEditor(seed, suggestURL) {
     <p class="text-sm text-dim">Owner, the only one who can sign in: <span class="mono">{{.Owner}}</span></p>
     {{if .GitHubSlug}}<p class="text-sm text-dim">GitHub App: <a href="https://github.com/apps/{{.GitHubSlug}}" target="_blank" class="underline mono">{{.GitHubSlug}}</a> · <a href="https://github.com/apps/{{.GitHubSlug}}/installations/new" target="_blank" class="underline">manage repository access</a></p>{{end}}
   </div>
+  <div class="card">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="h2">Backups</h2>
+      {{if and (not .BackupBucket) .CloudflareConnected}}<button hx-post="/settings/backups" class="btn-pri">Turn on backups</button>{{end}}
+    </div>
+    {{if .BackupBucket}}
+    <p class="text-sm text-dim">Every database is backed up daily to the R2 bucket <span class="mono">{{.BackupBucket}}</span> in your Cloudflare account. Its files can't be deleted or overwritten for 7 days, not even by hakobu, so a broken or compromised server can't wipe recent backups.</p>
+    {{else}}
+    <p class="text-sm text-dim">Creates a private R2 bucket in your Cloudflare account and backs up every database to it daily. Backups live off this server, so they survive losing it. R2's free plan includes 10 GB.</p>
+    {{end}}
+  </div>
+
   <div class="card">
     <div class="flex items-center justify-between gap-3">
       <h2 class="h2">Disk</h2>

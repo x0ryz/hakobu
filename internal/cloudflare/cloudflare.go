@@ -20,9 +20,13 @@ import (
 const (
 	authURL  = "https://dash.cloudflare.com/oauth2/auth"
 	tokenURL = "https://dash.cloudflare.com/oauth2/token"
-	apiURL   = "https://api.cloudflare.com/client/v4"
-	scopes   = "zone.read dns.write argotunnel.write offline_access"
+	// R2 holds the database backups: buckets (workers-r2) and their files
+	// (workers-r2-bucket-item).
+	scopes = "zone.read dns.write argotunnel.write workers-r2.write workers-r2-bucket-item.write offline_access"
 )
+
+// APIURL is the API's base; tests point it at a fake.
+var APIURL = "https://api.cloudflare.com/client/v4"
 
 // PKCE returns a random code verifier and its S256 challenge.
 func PKCE() (verifier, challenge string) {
@@ -125,16 +129,30 @@ func (c Client) call(method, path string, in, out any) error {
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, apiURL+path, body)
+	resp, err := c.do(method, path, "application/json", body, -1)
 	if err != nil {
 		return err
+	}
+	return decode(method, path, resp, out)
+}
+
+// do sends a request; size is the body's length, -1 to let net/http work
+// it out.
+func (c Client) do(method, path, contentType string, body io.Reader, size int64) (*http.Response, error) {
+	req, err := http.NewRequest(method, APIURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if size >= 0 {
+		req.ContentLength = size
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
+	req.Header.Set("Content-Type", contentType)
+	return http.DefaultClient.Do(req)
+}
+
+// decode reads the API's JSON envelope and unmarshals its result into out.
+func decode(method, path string, resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	var env struct {

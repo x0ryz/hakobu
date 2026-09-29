@@ -3,47 +3,116 @@ package ops
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/backup"
+	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
-func SetBackupStorage(s *store.Store, dbName, storageName string) error {
-	d, err := s.GetDatabase(ctx(), dbName)
+// Backups go to one R2 bucket in the connected Cloudflare account, written
+// through the REST API with hakobu's OAuth token: no S3 keys exist for it,
+// so nothing an app holds can reach the backups. The bucket's lock keeps
+// every file for backupLockDays, even from hakobu itself.
+const backupLockDays = 7
+
+// backupPartSize is under cloudflare.MaxObjectSize; tests make it smaller.
+var backupPartSize int64 = 256 << 20
+
+// BackupBucket is the R2 bucket backups go to, "" until they're set up.
+func BackupBucket(s *store.Store) string {
+	cf, err := s.GetCloudflare(ctx())
+	if err != nil {
+		return ""
+	}
+	return cf.BackupBucket
+}
+
+// SetupBackups creates the locked backup bucket; from then on every
+// database is backed up daily.
+func SetupBackups(s *store.Store) error {
+	if BackupBucket(s) != "" {
+		return nil
+	}
+	c, cf, err := cfClient(s)
 	if err != nil {
 		return err
 	}
-	if storageName != "" {
-		st, err := s.GetStorage(ctx(), storageName)
-		if err != nil || st.ProjectID != d.ProjectID {
-			return fmt.Errorf("storage %q not found in this project", storageName)
-		}
-	}
-	return s.SetDatabaseBackupStorage(ctx(), store.SetDatabaseBackupStorageParams{Name: dbName, BackupStorage: storageName})
-}
-
-var errNoStorage = errors.New("the storage no longer exists")
-
-// storageClient returns a client for the storage a backup is (or goes) in.
-func storageClient(s *store.Store, d store.Database, storage string) (*backup.Client, error) {
-	if storage == "" {
-		return nil, fmt.Errorf("pick a backup storage for %s first", d.Name)
-	}
-	st, err := s.GetStorage(ctx(), storage)
+	suffix, err := RandomHex(4)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", storage, errNoStorage)
+		return err
 	}
-	return hostClient(st)
+	bucket := "hakobu-backups-" + suffix
+	if err := c.CreateBucket(cf.AccountID, bucket); err != nil {
+		return fmt.Errorf("creating the R2 bucket failed (is R2 enabled in the Cloudflare dashboard?): %w", err)
+	}
+	if err := c.LockBucket(cf.AccountID, bucket, backupLockDays); err != nil {
+		return err
+	}
+	return s.SetBackupBucket(ctx(), bucket)
 }
 
-// SameServer reports whether a storage lives on this server, which makes
-// backups to it lost together with the database if the server's disk is.
-func SameServer(st store.Storage) bool { return st.Provider == "rustfs" }
+// r2 returns an API client with a fresh token, the account and the backup
+// bucket. It's called per request: a long upload can outlive a token.
+func r2(s *store.Store) (cloudflare.Client, string, string, error) {
+	c, cf, err := cfClient(s)
+	if err != nil {
+		return c, "", "", err
+	}
+	if cf.BackupBucket == "" {
+		return c, "", "", errors.New("backups aren't set up yet (Settings → Backups)")
+	}
+	return c, cf.AccountID, cf.BackupBucket, nil
+}
+
+func partKey(b string, i int) string { return fmt.Sprintf("%s/%03d", b, i) }
+
+// partsReader reads a backup's parts one after another as one stream.
+type partsReader struct {
+	s       *store.Store
+	b       store.Backup
+	next    int
+	current io.ReadCloser
+}
+
+func (r *partsReader) Read(p []byte) (int, error) {
+	for {
+		if r.current == nil {
+			if r.next == int(r.b.Parts) {
+				return 0, io.EOF
+			}
+			c, acc, bucket, err := r2(r.s)
+			if err != nil {
+				return 0, err
+			}
+			if r.current, err = c.GetObject(acc, bucket, partKey(r.b.ObjectKey, r.next)); err != nil {
+				return 0, err
+			}
+			r.next++
+		}
+		n, err := r.current.Read(p)
+		if err == io.EOF {
+			r.current.Close()
+			r.current, err = nil, nil
+			if n == 0 {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
+func (r *partsReader) Close() error {
+	if r.current != nil {
+		return r.current.Close()
+	}
+	return nil
+}
 
 // Backup jobs: one backup, check or restore per database at a time; the
 // panel shows the running one and how the last one went.
@@ -167,15 +236,14 @@ func backupAndCheck(s *store.Store, dbName string) error {
 	return nil
 }
 
-// BackupDatabase streams a gzipped pg_dump through a temporary file (S3
-// needs the size and hash up front) to the database's backup storage.
+// BackupDatabase streams a gzipped pg_dump through a temporary file (an
+// upload needs its size up front) to R2, in parts of backupPartSize.
 func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	d, err := s.GetDatabase(ctx(), dbName)
 	if err != nil {
 		return 0, err
 	}
-	client, err := storageClient(s, d, d.BackupStorage)
-	if err != nil {
+	if _, _, _, err := r2(s); err != nil {
 		return 0, err
 	}
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
@@ -194,11 +262,28 @@ func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	key := fmt.Sprintf("backups/%s/%s.sql.gz", d.Name, time.Now().UTC().Format("20060102-150405"))
-	if err := client.PutFile(key, f, "application/gzip"); err != nil {
+	key := fmt.Sprintf("%s/%s.sql.gz", d.Name, time.Now().UTC().Format("20060102-150405"))
+	parts, err := uploadParts(s, key, f, info.Size())
+	if err != nil {
 		return 0, err
 	}
-	return s.CreateBackup(ctx(), store.CreateBackupParams{Database: d.Name, Storage: d.BackupStorage, ObjectKey: key, SizeBytes: info.Size()})
+	return s.CreateBackup(ctx(), store.CreateBackupParams{Database: d.Name, ObjectKey: key, Parts: int64(parts), SizeBytes: info.Size()})
+}
+
+// uploadParts uploads size bytes of r as key/000, key/001, ...
+func uploadParts(s *store.Store, key string, r io.ReaderAt, size int64) (parts int, err error) {
+	for offset := int64(0); offset < size || parts == 0; offset += backupPartSize {
+		c, acc, bucket, err := r2(s)
+		if err != nil {
+			return 0, err
+		}
+		n := min(backupPartSize, size-offset)
+		if err := c.PutObject(acc, bucket, partKey(key, parts), io.NewSectionReader(r, offset, n), n); err != nil {
+			return 0, err
+		}
+		parts++
+	}
+	return parts, nil
 }
 
 // tmpDir holds dumps on their way to storage; it's on the data disk rather
@@ -230,14 +315,7 @@ func verify(s *store.Store, b store.Backup) (tables int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	client, err := storageClient(s, d, b.Storage)
-	if err != nil {
-		return 0, err
-	}
-	body, err := client.GetStream(b.ObjectKey)
-	if err != nil {
-		return 0, err
-	}
+	body := &partsReader{s: s, b: b}
 	defer body.Close()
 
 	// Database names can't contain dots, so this never clashes with one.
@@ -266,14 +344,7 @@ func restoreBackup(s *store.Store, b store.Backup) error {
 	if err != nil {
 		return err
 	}
-	client, err := storageClient(s, d, b.Storage)
-	if err != nil {
-		return err
-	}
-	body, err := client.GetStream(b.ObjectKey)
-	if err != nil {
-		return err
-	}
+	body := &partsReader{s: s, b: b}
 	defer body.Close()
 	return backup.RestoreDatabase(ctx(), PostgresContainer, d.User, d.Name, body)
 }
@@ -282,26 +353,22 @@ func restoreBackup(s *store.Store, b store.Backup) error {
 // newest backup that restored in its check.
 const keepWeeks = 4
 
-// RotateBackups deletes the backups the rotation no longer keeps, from the
-// storage and the list.
+// RotateBackups deletes the backups the rotation no longer keeps, from R2
+// and the list.
 func RotateBackups(s *store.Store, dbName string, now time.Time) error {
-	d, err := s.GetDatabase(ctx(), dbName)
-	if err != nil {
-		return err
-	}
 	all, err := s.ListAllBackups(ctx(), dbName)
 	if err != nil {
 		return err
 	}
 	for _, b := range backupsToDrop(all, config.BackupKeep, now) {
-		// A backup on a storage that's gone is only forgotten; any other
-		// failure is retried by the next rotation.
-		client, err := storageClient(s, d, b.Storage)
-		if err == nil {
-			err = client.DeleteObject(b.ObjectKey)
-		}
-		if err != nil && !errors.Is(err, errNoStorage) {
-			return err
+		for i := range int(b.Parts) {
+			c, acc, bucket, err := r2(s)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteObject(acc, bucket, partKey(b.ObjectKey, i)); err != nil {
+				return err // retried by the next rotation
+			}
 		}
 		if err := s.DeleteBackup(ctx(), b.ID); err != nil {
 			return err
@@ -311,10 +378,12 @@ func RotateBackups(s *store.Store, dbName string, now time.Time) error {
 }
 
 // backupsToDrop picks what the rotation deletes from backups, newest first.
+// Backups still under the bucket's lock can't be deleted, so they're kept.
 func backupsToDrop(backups []store.Backup, keepLast int, now time.Time) []store.Backup {
 	keep := map[int64]bool{}
 	weeks := map[[2]int]bool{}
 	cutoff := now.AddDate(0, 0, -7*keepWeeks)
+	locked := now.AddDate(0, 0, -backupLockDays)
 	verified := false
 	for i, b := range backups {
 		if i < keepLast {
@@ -327,6 +396,9 @@ func backupsToDrop(backups []store.Backup, keepLast int, now time.Time) []store.
 		if err != nil {
 			keep[b.ID] = true // unknown age: never guess it's old
 			continue
+		}
+		if t.After(locked) {
+			keep[b.ID] = true
 		}
 		year, week := t.ISOWeek()
 		if t.After(cutoff) && !weeks[[2]int{year, week}] {
@@ -342,19 +414,16 @@ func backupsToDrop(backups []store.Backup, keepLast int, now time.Time) []store.
 	return drop
 }
 
-// BackupDue backs up, checks and rotates every database with a backup
-// storage whose last backup is older than config.BackupEvery. It's called
-// every hour, so restarts of the agent don't postpone backups.
+// BackupDue backs up, checks and rotates every database whose last backup
+// is older than config.BackupEvery. It's called every hour, so restarts of
+// the agent don't postpone backups.
 func BackupDue(s *store.Store) map[string]error {
 	results := map[string]error{}
 	dbs, err := s.ListDatabases(ctx())
-	if err != nil {
+	if err != nil || BackupBucket(s) == "" {
 		return results
 	}
 	for _, d := range dbs {
-		if d.BackupStorage == "" {
-			continue
-		}
 		last, err := s.ListBackups(ctx(), store.ListBackupsParams{Database: d.Name, Limit: 1})
 		if err == nil && len(last) > 0 {
 			if t, err := time.Parse("2006-01-02T15:04:05Z", last[0].CreatedAt); err == nil && time.Since(t) < config.BackupEvery {

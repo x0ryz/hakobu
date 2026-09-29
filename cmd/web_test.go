@@ -32,16 +32,24 @@ func TestTemplatesRender(t *testing.T) {
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
 		"errors":  []store.TelemetryEvent{{Kind: "error", Message: "boom"}},
-		"database": map[string]any{"DB": db, "Project": project, "Ready": true, "Env": splitEnv([]string{"A=1"}), "Storages": storages, "Backups": []store.Backup{{ObjectKey: "k", SizeBytes: 2048}, {ID: 2, VerifiedAt: "t", Tables: 3}, {ID: 3, VerifiedAt: "t", VerifyError: "boom"}}, "UsedBy": []string{"web"},
-			"SameServer": true, "Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
-		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB"},
+		"database": map[string]any{"DB": db, "Project": project, "Ready": true, "Env": splitEnv([]string{"A=1"}), "BackupBucket": "hakobu-backups-1", "Backups": []store.Backup{{ObjectKey: "k", SizeBytes: 2048}, {ID: 2, VerifiedAt: "t", Tables: 3}, {ID: 3, VerifiedAt: "t", VerifyError: "boom"}}, "UsedBy": []string{"web"},
+			"Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
+		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1"},
 	}
 	for name, data := range cases {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// The other branches: no worker, no apps domain, scan error.
+	// The other branches: no worker, no apps domain, scan error, backups off.
+	for name, data := range map[string]any{
+		"database": map[string]any{"DB": db, "Job": ops.DBJob{Last: "x", Failed: true}},
+		"settings": map[string]any{"CloudflareConnected": true},
+	} {
+		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {
+			t.Errorf("%s without backups: %v", name, err)
+		}
+	}
 	if err := templates.ExecuteTemplate(io.Discard, "app", map[string]any{"App": app, "Project": project}); err != nil {
 		t.Errorf("app without worker: %v", err)
 	}

@@ -122,12 +122,6 @@ SELECT * FROM databases ORDER BY name;
 -- name: ListDatabasesByProject :many
 SELECT * FROM databases WHERE project_id = ? ORDER BY name;
 
--- name: SetDatabaseBackupStorage :exec
-UPDATE databases SET backup_storage = ? WHERE name = ?;
-
--- name: DatabasesBackingUpTo :many
-SELECT name FROM databases WHERE backup_storage = ? ORDER BY name;
-
 -- name: DeleteDatabase :exec
 DELETE FROM databases WHERE name = ?;
 
@@ -149,7 +143,7 @@ DELETE FROM storages WHERE name = ?;
 -- Backups
 
 -- name: CreateBackup :one
-INSERT INTO backups (database, storage, object_key, size_bytes) VALUES (?, ?, ?, ?) RETURNING id;
+INSERT INTO backups (database, object_key, parts, size_bytes) VALUES (?, ?, ?, ?) RETURNING id;
 
 -- name: GetBackup :one
 SELECT * FROM backups WHERE id = ?;
@@ -241,6 +235,9 @@ SELECT * FROM cloudflare WHERE id = 1;
 -- name: SaveCloudflareToken :exec
 INSERT INTO cloudflare (id, access_token, refresh_token, expires_at) VALUES (1, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at;
+
+-- name: SetBackupBucket :exec
+UPDATE cloudflare SET backup_bucket = ? WHERE id = 1;
 
 -- name: SaveCloudflareTunnel :exec
 UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zone_id = ?, panel_record_id = ? WHERE id = 1;

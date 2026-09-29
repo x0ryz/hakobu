@@ -442,16 +442,11 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			return
 		}
 		project, _ := s.GetProjectByID(r.Context(), d.ProjectID)
-		storages, _ := s.ListStoragesByProject(r.Context(), d.ProjectID)
 		backups, _ := s.ListBackups(r.Context(), store.ListBackupsParams{Database: d.Name, Limit: 30})
 		usedBy, _ := s.AppsUsingDatabase(r.Context(), d.Name)
-		sameServer := false
-		for _, st := range storages {
-			sameServer = sameServer || (st.Name == d.BackupStorage && ops.SameServer(st))
-		}
 		render(w, "database", map[string]any{
 			"DB": d, "Project": project, "Ready": ops.DatabaseReady(), "Env": splitEnv(ops.DatabaseEnv(d)),
-			"Storages": storages, "Backups": backups, "UsedBy": usedBy, "SameServer": sameServer,
+			"Backups": backups, "UsedBy": usedBy, "BackupBucket": ops.BackupBucket(s),
 			"Job": ops.DatabaseJob(d.Name), "Keep": config.BackupKeep,
 		})
 	})
@@ -466,10 +461,6 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			redirect = "/projects/" + p.Name
 		}
 		return redirect, ops.DeleteDatabase(s, d.Name)
-	})
-
-	action("POST /databases/{d}/backup-storage", func(r *http.Request) (string, error) {
-		return "", ops.SetBackupStorage(s, r.PathValue("d"), r.FormValue("storage"))
 	})
 
 	action("POST /databases/{d}/backups", func(r *http.Request) (string, error) {
@@ -496,6 +487,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		data := map[string]any{
 			"PublicHost": config.PublicHost(), "Owner": owner,
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
+			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 		}
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
@@ -505,6 +497,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 
 	action("POST /settings/cleanup", func(r *http.Request) (string, error) {
 		return "", ops.Cleanup(s)
+	})
+
+	action("POST /settings/backups", func(r *http.Request) (string, error) {
+		return "", ops.SetupBackups(s)
 	})
 }
 
