@@ -12,7 +12,7 @@ import (
 )
 
 // HAKOBU_DOCKER_TEST=1 go test ./internal/s3 -run Docker -v
-func TestDockerCreateBucket(t *testing.T) {
+func TestDockerRustFSUsers(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
 	}
@@ -43,5 +43,40 @@ func TestDockerCreateBucket(t *testing.T) {
 	st.SecretAccessKey = "wrong"
 	if err := NewClient(st).CreateBucket(); err == nil {
 		t.Error("a wrong key was accepted")
+	}
+	st.SecretAccessKey = "ztsecret123"
+	root := NewClient(st)
+	other := st
+	other.Bucket = "zt-other"
+	if err := NewClient(other).CreateBucket(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A bucket user (hakobu's own key lengths) reaches its bucket only.
+	if err := root.AddBucketUser("hk0123456789abcdef01", strings.Repeat("s", 40)); err != nil {
+		t.Fatal(err)
+	}
+	user := store.Storage{Endpoint: st.Endpoint, AccessKeyID: "hk0123456789abcdef01", SecretAccessKey: secret.String(strings.Repeat("s", 40))}
+	user.Bucket = "zt-bucket"
+	if err := NewClient(user).CreateBucket(); err != nil {
+		t.Errorf("user on its own bucket: %v", err)
+	}
+	user.Bucket = "zt-other"
+	if err := NewClient(user).CreateBucket(); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("user on another bucket: %v", err)
+	}
+	if err := NewClient(user).AddBucketUser("hkevil", "secretsecret"); err == nil {
+		t.Error("a bucket user could use the admin API")
+	}
+
+	// Removing it revokes the keys; doing it twice is fine.
+	for range 2 {
+		if err := root.RemoveBucketUser("hk0123456789abcdef01"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user.Bucket = "zt-bucket"
+	if err := NewClient(user).CreateBucket(); err == nil {
+		t.Error("removed user still works")
 	}
 }

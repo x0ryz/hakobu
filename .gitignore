@@ -28,3 +28,4 @@
 
 # wrangler cache (account id, email)
 .wrangler/
+/dist/

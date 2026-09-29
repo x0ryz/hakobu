@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/s3"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -253,4 +254,58 @@ func dockerOut(t *testing.T, args ...string) string {
 		t.Fatalf("docker %v: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestDockerRustFSStorages uses the real hakobu-rustfs container name, so it
+// only runs where there's none and removes it afterwards.
+func TestDockerRustFSStorages(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	if st, _ := deploy.ContainerStatus(ctx(), rustfsContainer); st != "not found" {
+		t.Skip(rustfsContainer + " exists; not touching it")
+	}
+	t.Cleanup(func() {
+		deploy.RemoveContainer(ctx(), rustfsContainer)
+		deploy.RemoveVolume(ctx(), rustfsContainer+"_data")
+	})
+	s, err := store.Open(filepath.Join(t.TempDir(), "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateProject(s, "p"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"files", "media"} {
+		if err := CreateStorage(s, "p", store.Storage{Name: name, Provider: "rustfs"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, _ := s.GetStorage(ctx(), "files")
+	media, _ := s.GetStorage(ctx(), "media")
+	env, _ := deploy.ContainerEnv(ctx(), rustfsContainer)
+	if files.AccessKeyID == media.AccessKeyID || files.AccessKeyID == env["RUSTFS_ACCESS_KEY"] {
+		t.Fatalf("storages share keys: %q, %q (root %q)", files.AccessKeyID, media.AccessKeyID, env["RUSTFS_ACCESS_KEY"])
+	}
+
+	// files' keys reach its bucket, not media's.
+	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer)
+	as := func(keys, bucket store.Storage) error {
+		keys.Endpoint, keys.Bucket = "http://"+ip+":"+rustfsPort, bucket.Bucket
+		return s3.NewClient(keys).CreateBucket()
+	}
+	if err := as(files, files); err != nil {
+		t.Errorf("own bucket: %v", err)
+	}
+	if err := as(files, media); err == nil {
+		t.Error("files' keys reach media's bucket")
+	}
+
+	// Deleting the storage revokes its keys.
+	if err := DeleteStorage(s, "files"); err != nil {
+		t.Fatal(err)
+	}
+	if err := as(files, files); err == nil {
+		t.Error("deleted storage's keys still work")
+	}
 }
