@@ -24,14 +24,10 @@ case "$(uname -m)" in
   *) echo "unsupported CPU architecture $(uname -m)"; exit 1 ;;
 esac
 
-echo "==> installing dependencies (docker, git, cloudflared, railpack, buildkit)"
+echo "==> installing dependencies (docker, git, railpack, buildkit)"
 command -v curl >/dev/null || { apt-get update && apt-get install -y curl; } || yum install -y curl
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 command -v git >/dev/null || { apt-get update && apt-get install -y git; } || yum install -y git
-if ! [ -x /usr/local/bin/cloudflared ]; then
-  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}" -o /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
-fi
 if ! command -v railpack >/dev/null; then
   curl -fsSL https://railpack.com/install.sh | bash -s -- --yes || echo "WARNING: railpack install failed, only Dockerfile builds will work"
 fi
@@ -49,8 +45,18 @@ fi
 if [ -n "${HAKOBU_BINARY:-}" ]; then
   cp "$HAKOBU_BINARY" /opt/hakobu/hakobu
   echo "    local binary $HAKOBU_BINARY"
-elif [ -n "$VERSION" ] && curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu; then
-  echo "    hakobu $VERSION"
+elif [ -n "$VERSION" ] && curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu.new; then
+  # A download that doesn't match the release's checksum is never installed.
+  SUMS="$(curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/checksums.txt")"
+  WANT="$(printf '%s\n' "$SUMS" | awk -v f="hakobu-linux-${ARCH}" '$2 == f {print $1}')"
+  GOT="$(sha256sum /opt/hakobu/hakobu.new | cut -d' ' -f1)"
+  if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then
+    rm -f /opt/hakobu/hakobu.new
+    echo "checksum mismatch for hakobu-linux-${ARCH} ${VERSION}, not installing it"
+    exit 1
+  fi
+  mv /opt/hakobu/hakobu.new /opt/hakobu/hakobu
+  echo "    hakobu $VERSION (checksum verified)"
 else
   echo "==> no release binary found, building from source"
   GO_NEED="1.27.1"
@@ -84,7 +90,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-# hakobu runs cloudflared itself; drop the separate unit older installs had.
+# hakobu runs cloudflared in a container; drop the separate unit older installs had.
 if [ -f /etc/systemd/system/hakobu-tunnel.service ]; then
   systemctl disable --now hakobu-tunnel >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/hakobu-tunnel.service

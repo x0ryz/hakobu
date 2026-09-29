@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,9 +70,17 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listen %s: %w (is another hakobu agent running?)", agentAddr, err)
 	}
 
+	sock, err := listenPanelSocket()
+	if err != nil {
+		return err
+	}
+
 	go runProxyPoller(s)
+	go ops.WatchOOM(s)
 	go runBackupScheduler(s)
-	ops.StartTunnel(s)
+	if err := ops.StartTunnel(s); err != nil {
+		fmt.Println("failed to start the tunnel:", err)
+	}
 
 	fmt.Println("hakobu listening on", ln.Addr())
 	switch {
@@ -82,12 +92,32 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		fmt.Println("Panel: https://" + config.PublicHost())
 	}
 	srv := &http.Server{
-		Handler:      edge.Router(s, mux),
+		Handler:      edge.Router(s, panelHandler(mux)),
 		ReadTimeout:  config.ReadTimeout,
 		WriteTimeout: config.WriteTimeout,
 		IdleTimeout:  config.IdleTimeout,
 	}
+	go srv.Serve(sock)
 	return srv.Serve(ln)
+}
+
+// listenPanelSocket is where cloudflared, in its own container, reaches the
+// panel: a unix socket in a directory mounted into it. The socket is open to
+// every local user, like the loopback port.
+func listenPanelSocket() (net.Listener, error) {
+	if err := os.MkdirAll(ops.PanelSocketDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(ops.PanelSocketDir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(ops.PanelSocketDir, "panel.sock")
+	os.Remove(path) // left by the previous run
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	return ln, os.Chmod(path, 0o666)
 }
 
 // ensureSetupToken keeps a one-time setup token on disk until an owner has
@@ -110,28 +140,46 @@ func ensureSetupToken(s *store.Store) (string, error) {
 	return "https://" + config.PublicHost() + "/setup?token=" + token, nil
 }
 
-// runProxyPoller keeps every app's proxy listening; after an agent restart
-// this re-attaches them to their running containers.
+// runProxyPoller keeps every app's proxy listening and its live container
+// reachable by the tunnel (after an agent restart this re-attaches them), and
+// retries tunnel route updates that failed.
 func runProxyPoller(s *store.Store) {
+	lastErr := ""
 	for {
 		if apps, err := s.ListApps(context.Background()); err == nil {
 			for _, a := range apps {
 				if !ops.IsDeploying(a.Name) { // a running job (or deletion) owns the proxy
 					ops.EnsureProxy(a)
+					if err := ops.EnsureEdge(a); err != nil {
+						fmt.Println("edge network:", err)
+					}
 				}
 			}
 		}
+		err := ops.SyncTunnel(s)
+		if err != nil && err.Error() != lastErr {
+			fmt.Println("tunnel routes not updated (retrying):", err)
+		}
+		lastErr = fmt.Sprint(err)
 		time.Sleep(config.ProxyPollEvery)
 	}
 }
 
+// runBackupScheduler checks hourly for databases due a backup (so restarts
+// don't postpone them) and cleans up once a day.
 func runBackupScheduler(s *store.Store) {
-	for range time.Tick(config.BackupEvery) {
-		for name, err := range ops.BackupAll(s) {
+	time.Sleep(time.Minute) // let Docker and the databases come up first
+	lastCleanup := time.Now()
+	for ; ; time.Sleep(time.Hour) {
+		for name, err := range ops.BackupDue(s) {
 			if err != nil {
 				fmt.Println("backup failed for", name+":", err)
 			}
 		}
+		if time.Since(lastCleanup) < 24*time.Hour {
+			continue
+		}
+		lastCleanup = time.Now()
 		if err := s.PruneOldData(context.Background(), config.RetentionDays); err != nil {
 			fmt.Println("prune failed:", err)
 		}

@@ -16,6 +16,7 @@ var (
 	IdleTimeout     = envDuration("HAKOBU_IDLE_TIMEOUT", 120*time.Second)
 	ProxyPollEvery  = envDuration("HAKOBU_PROXY_POLL", 10*time.Second)
 	BackupEvery     = envDuration("HAKOBU_BACKUP_EVERY", 24*time.Hour)
+	BackupKeep      = envInt("HAKOBU_BACKUP_KEEP", 7) // plus one a week for four weeks
 	RetentionDays   = envInt("HAKOBU_RETENTION_DAYS", 7)
 	PostgresVersion = envString("HAKOBU_POSTGRES_VERSION", "18")
 

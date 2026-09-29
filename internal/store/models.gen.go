@@ -4,6 +4,10 @@
 
 package store
 
+import (
+	"github.com/x0ryz/hakobu/internal/secret"
+)
+
 type AccessControl struct {
 	ID            int64
 	OwnerLogin    string
@@ -25,12 +29,14 @@ type App struct {
 	BuildPath       string
 	BuildStrategy   string
 	ActiveSlot      string
-	Env             string
-	SentryKey       string
+	Env             secret.String
+	SentryKey       secret.String
 	HealthCheckPath string
 	LinkedDB        string
 	LinkedStorage   string
 	ShareVolumes    int64
+	MemoryMB        int64
+	Cpus            float64
 }
 
 type AppRecord struct {
@@ -44,8 +50,8 @@ type AppRecord struct {
 	BuildPath       string
 	BuildStrategy   string
 	ActiveSlot      string
-	Env             string
-	SentryKey       string
+	Env             secret.String
+	SentryKey       secret.String
 	HealthCheckPath string
 	LinkedDB        string
 	LinkedStorage   string
@@ -53,24 +59,30 @@ type AppRecord struct {
 	DnsZoneID       string
 	DnsRecordID     string
 	ShareVolumes    int64
+	MemoryMB        int64
+	Cpus            float64
 }
 
 type Backup struct {
-	ID        int64
-	Database  string
-	ObjectKey string
-	SizeBytes int64
-	CreatedAt string
+	ID          int64
+	Database    string
+	ObjectKey   string
+	SizeBytes   int64
+	CreatedAt   string
+	Storage     string
+	VerifiedAt  string
+	VerifyError string
+	Tables      int64
 }
 
 type Cloudflare struct {
 	ID            int64
-	AccessToken   string
-	RefreshToken  string
+	AccessToken   secret.String
+	RefreshToken  secret.String
 	ExpiresAt     string
 	AccountID     string
 	TunnelID      string
-	TunnelToken   string
+	TunnelToken   secret.String
 	PanelZoneID   string
 	PanelRecordID string
 }
@@ -79,7 +91,7 @@ type Database struct {
 	Name          string
 	ProjectID     int64
 	User          string
-	Password      string
+	Password      secret.String
 	BackupStorage string
 }
 
@@ -96,16 +108,16 @@ type GitHubApp struct {
 	ID            int64
 	AppID         int64
 	Slug          string
-	PrivateKey    string
-	WebhookSecret string
+	PrivateKey    secret.String
+	WebhookSecret secret.String
 	ClientID      string
-	ClientSecret  string
+	ClientSecret  secret.String
 }
 
 type Project struct {
 	ID        int64
 	Name      string
-	SharedEnv string
+	SharedEnv secret.String
 }
 
 type Session struct {
@@ -121,7 +133,7 @@ type Storage struct {
 	AccountID       string
 	Endpoint        string
 	AccessKeyID     string
-	SecretAccessKey string
+	SecretAccessKey secret.String
 	Bucket          string
 	Region          string
 }
@@ -146,5 +158,5 @@ type Worker struct {
 	AppName string
 	Name    string
 	Command string
-	Env     string
+	Env     secret.String
 }

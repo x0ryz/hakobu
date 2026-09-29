@@ -44,7 +44,7 @@ func TestDockerDeploys(t *testing.T) {
 			if err == nil {
 				t.Fatalf("deploy %s should fail:\n%s", v, out.String())
 			}
-			return out.String()
+			return out.String() + err.Error()
 		}
 		if err != nil {
 			t.Fatalf("deploy %s: %v\n%s", v, err, out.String())
@@ -112,6 +112,24 @@ func TestDockerDeploys(t *testing.T) {
 	}
 	expectServing(t, app, "v3")
 
+	// Limits reach the container; going over the memory limit fails the
+	// deploy with the reason.
+	if err := SetLimits(s, app.Name, 32, 0.5); err != nil {
+		t.Fatal(err)
+	}
+	out = deployVersion("hungry", true)
+	if !strings.Contains(out, "more than its 32 MB memory limit") {
+		t.Errorf("expected an out-of-memory reason:\n%s", out)
+	}
+	expectServing(t, app, "v3")
+	deployVersion("v3b", false)
+	if got := dockerOut(t, "inspect", "-f", "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.RestartPolicy.Name}}", reload().ContainerName()); got != "33554432 500000000 unless-stopped" {
+		t.Errorf("container limits and restart policy = %q", got)
+	}
+	if err := SetLimits(s, app.Name, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
 	// Shared volumes keep the zero-downtime switch.
 	if err := SetShareVolumes(s, app.Name, true); err != nil {
 		t.Fatal(err)
@@ -121,8 +139,8 @@ func TestDockerDeploys(t *testing.T) {
 	}
 	expectServing(t, app, "v4")
 
-	// Rollback goes to v3, rolling back again returns to v4.
-	for _, want := range []string{"v3", "v4"} {
+	// Rollback goes to v3b, rolling back again returns to v4.
+	for _, want := range []string{"v3b", "v4"} {
 		if err := StartRollback(s, app.Name); err != nil {
 			t.Fatal(err)
 		}
@@ -175,6 +193,8 @@ func buildTestImage(t *testing.T, tag, version string) {
 		cmd = "sleep 3600" // never listens
 	case "crashing":
 		cmd = "echo missing POSTGRES_PASSWORD >&2; exit 1"
+	case "hungry":
+		cmd = "exec dd if=/dev/zero of=/dev/null bs=256M count=1"
 	}
 	dir := t.TempDir()
 	dockerfile := fmt.Sprintf("FROM busybox:1.36\nRUN mkdir /www && echo -n %s > /www/index.html\nCMD [\"sh\", \"-c\", %q]\n", version, cmd)
@@ -186,6 +206,13 @@ func buildTestImage(t *testing.T, tag, version string) {
 
 func expectServing(t *testing.T, app store.App, want string) {
 	t.Helper()
+	// What cloudflared sees: the app's alias on the edge network, served
+	// by the live container only.
+	edge := dockerOut(t, "run", "--rm", "--quiet", "--network", deploy.EdgeNetwork, "busybox:1.36",
+		"sh", "-c", fmt.Sprintf("nslookup %s 127.0.0.11 | grep -c '^Address' ; wget -qO- http://%s:8080/", EdgeAlias(app.Name), EdgeAlias(app.Name)))
+	if edge != "2\n"+want { // the resolver's own address, then exactly one container
+		t.Errorf("edge network serves %q, want one address and %q", edge, want)
+	}
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", app.Port))
 	if err != nil {
 		t.Fatalf("app proxy: %v", err)

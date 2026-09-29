@@ -7,6 +7,7 @@ import (
 
 	"github.com/x0ryz/hakobu/internal/backup"
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -58,7 +59,7 @@ func provisionRustFS(st *store.Storage) error {
 		return err
 	}
 	if env != nil {
-		st.AccessKeyID, st.SecretAccessKey = env["RUSTFS_ACCESS_KEY"], env["RUSTFS_SECRET_KEY"]
+		st.AccessKeyID, st.SecretAccessKey = env["RUSTFS_ACCESS_KEY"], secret.String(env["RUSTFS_SECRET_KEY"])
 		if err := deploy.StartContainer(ctx(), rustfsContainer); err != nil {
 			return err
 		}
@@ -66,12 +67,14 @@ func provisionRustFS(st *store.Storage) error {
 		if st.AccessKeyID, err = RandomHex(16); err != nil {
 			return err
 		}
-		if st.SecretAccessKey, err = RandomHex(32); err != nil {
+		key, err := RandomHex(32)
+		if err != nil {
 			return err
 		}
+		st.SecretAccessKey = secret.String(key)
 		env := []string{
 			"RUSTFS_ACCESS_KEY=" + st.AccessKeyID,
-			"RUSTFS_SECRET_KEY=" + st.SecretAccessKey,
+			"RUSTFS_SECRET_KEY=" + key,
 			"RUSTFS_ADDRESS=:" + rustfsPort,
 			"RUSTFS_CONSOLE_ENABLE=false",
 		}
@@ -84,10 +87,12 @@ func provisionRustFS(st *store.Storage) error {
 	if err != nil {
 		return err
 	}
-	if !deploy.WaitHealthy(30, time.Second, func() bool { return deploy.HTTPCheck(client.Endpoint(), false) }) {
-		return fmt.Errorf("rustfs failed to become ready")
+	// RustFS answers 503 until its storage is up, so the first successful
+	// request is the bucket itself.
+	if !deploy.WaitHealthy(60, time.Second, func() bool { err = client.CreateBucket(); return err == nil }) {
+		return fmt.Errorf("rustfs failed to become ready: %w", err)
 	}
-	return client.CreateBucket()
+	return nil
 }
 
 // hostClient returns an S3 client usable from the agent process. RustFS is
@@ -129,7 +134,7 @@ func storageEnv(st store.Storage) []string {
 	env := []string{
 		"STORAGE_PROVIDER=" + provider,
 		"S3_ACCESS_KEY_ID=" + st.AccessKeyID,
-		"S3_SECRET_ACCESS_KEY=" + st.SecretAccessKey,
+		"S3_SECRET_ACCESS_KEY=" + string(st.SecretAccessKey),
 		"S3_BUCKET_NAME=" + st.Bucket,
 		"S3_REGION=" + st.Region,
 	}

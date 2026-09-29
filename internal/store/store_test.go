@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/x0ryz/hakobu/internal/secret"
 )
 
 func TestStore(t *testing.T) {
@@ -143,5 +146,59 @@ func TestMigrateFromVersion1(t *testing.T) {
 	}
 	if app.ContainerPort != 8000 || app.LivePort != 0 || app.ProjectName != "demo" {
 		t.Errorf("migrated app = %+v", app)
+	}
+}
+
+func TestSecretsEncryptedAtRest(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hakobu.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateProject(ctx, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectSharedEnv(ctx, SetProjectSharedEnvParams{Name: "demo", SharedEnv: "TOKEN=hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+	// A value from before encryption is encrypted on the next Open.
+	if _, err := s.db.Exec(`INSERT INTO projects (name, shared_env) VALUES ('old', 'OLD=plain')`); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.db.Query(`SELECT name, shared_env FROM projects`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, raw string
+		rows.Scan(&name, &raw)
+		if !secret.IsEncrypted(raw) || strings.Contains(raw, "hunter2") || strings.Contains(raw, "plain") {
+			t.Errorf("%s: stored %q, want ciphertext", name, raw)
+		}
+	}
+	for name, want := range map[string]string{"demo": "TOKEN=hunter2", "old": "OLD=plain"} {
+		p, err := s.GetProject(ctx, name)
+		if err != nil || string(p.SharedEnv) != want {
+			t.Errorf("%s: read %q, %v, want %q", name, p.SharedEnv, err, want)
+		}
+	}
+
+	if err := s.NewSession(ctx, "tok", "me", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if login, err := s.SessionLogin(ctx, "tok"); err != nil || login != "me" {
+		t.Errorf("session = %q, %v", login, err)
+	}
+	var stored string
+	s.db.QueryRow(`SELECT id FROM sessions`).Scan(&stored)
+	if stored == "tok" {
+		t.Error("session token stored as is")
 	}
 }

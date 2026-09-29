@@ -76,6 +76,9 @@ DELETE FROM apps WHERE name = ?;
 -- name: SetAppShareVolumes :exec
 UPDATE apps SET share_volumes = ? WHERE name = ?;
 
+-- name: SetAppLimits :exec
+UPDATE apps SET memory_mb = ?, cpus = ? WHERE name = ?;
+
 -- Volumes
 
 -- name: AddVolume :exec
@@ -145,11 +148,26 @@ DELETE FROM storages WHERE name = ?;
 
 -- Backups
 
--- name: CreateBackup :exec
-INSERT INTO backups (database, object_key, size_bytes) VALUES (?, ?, ?);
+-- name: CreateBackup :one
+INSERT INTO backups (database, storage, object_key, size_bytes) VALUES (?, ?, ?, ?) RETURNING id;
+
+-- name: GetBackup :one
+SELECT * FROM backups WHERE id = ?;
 
 -- name: ListBackups :many
 SELECT * FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?;
+
+-- name: ListAllBackups :many
+SELECT * FROM backups WHERE database = ? ORDER BY id DESC;
+
+-- name: SetBackupVerified :exec
+UPDATE backups SET verified_at = ?, verify_error = ?, tables = ? WHERE id = ?;
+
+-- name: DeleteBackup :exec
+DELETE FROM backups WHERE id = ?;
+
+-- name: DeleteBackupsOf :exec
+DELETE FROM backups WHERE database = ?;
 
 -- GitHub App and access control
 
@@ -213,6 +231,9 @@ SELECT * FROM telemetry_events WHERE app_name = ? ORDER BY id DESC LIMIT ?;
 
 -- name: DeleteTelemetryOfApp :exec
 DELETE FROM telemetry_events WHERE app_name = ?;
+
+-- name: LastTelemetryOfKind :one
+SELECT created_at FROM telemetry_events WHERE app_name = ? AND kind = ? ORDER BY id DESC LIMIT 1;
 
 -- name: PruneTelemetry :exec
 DELETE FROM telemetry_events WHERE created_at < ?;

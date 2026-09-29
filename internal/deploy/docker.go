@@ -18,7 +18,13 @@ import (
 	"time"
 )
 
-const NetworkName = "hakobu"
+// NetworkName is where apps, workers and services talk to each other.
+// EdgeNetwork only holds cloudflared and each app's live container, under
+// the app's alias, so the tunnel reaches apps without going through hakobu.
+const (
+	NetworkName = "hakobu"
+	EdgeNetwork = "hakobu-edge"
+)
 
 var dockerClient = &http.Client{
 	Transport: &http.Transport{
@@ -52,11 +58,11 @@ func dockerRequest(ctx context.Context, method, path string, body any) ([]byte, 
 	return respBody, resp.StatusCode, err
 }
 
-func EnsureNetwork(ctx context.Context) error {
-	if _, status, err := dockerRequest(ctx, "GET", "/networks/"+NetworkName, nil); err == nil && status == http.StatusOK {
+func ensureNetwork(ctx context.Context, name string) error {
+	if _, status, err := dockerRequest(ctx, "GET", "/networks/"+name, nil); err == nil && status == http.StatusOK {
 		return nil
 	}
-	respBody, status, err := dockerRequest(ctx, "POST", "/networks/create", map[string]any{"Name": NetworkName, "Driver": "bridge"})
+	respBody, status, err := dockerRequest(ctx, "POST", "/networks/create", map[string]any{"Name": name, "Driver": "bridge"})
 	if err != nil {
 		return err
 	}
@@ -67,16 +73,21 @@ func EnsureNetwork(ctx context.Context) error {
 }
 
 // runContainer replaces any container with the same name and starts a new
-// one on the hakobu network with restart=unless-stopped.
+// one on the hakobu network (or hostConfig's NetworkMode), with
+// restart=unless-stopped unless hostConfig sets another restart policy.
 func runContainer(ctx context.Context, name string, spec map[string]any, hostConfig map[string]any) (string, error) {
-	if err := EnsureNetwork(ctx); err != nil {
+	if hostConfig["NetworkMode"] == nil {
+		hostConfig["NetworkMode"] = NetworkName
+	}
+	if err := ensureNetwork(ctx, hostConfig["NetworkMode"].(string)); err != nil {
 		return "", fmt.Errorf("failed to ensure network: %w", err)
 	}
 	if err := RemoveContainer(ctx, name); err != nil {
 		return "", fmt.Errorf("failed to remove old container: %w", err)
 	}
-	hostConfig["NetworkMode"] = NetworkName
-	hostConfig["RestartPolicy"] = map[string]string{"Name": "unless-stopped"}
+	if hostConfig["RestartPolicy"] == nil {
+		hostConfig["RestartPolicy"] = map[string]string{"Name": "unless-stopped"}
+	}
 	spec["HostConfig"] = hostConfig
 
 	respBody, status, err := dockerRequest(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), spec)
@@ -102,19 +113,66 @@ func runContainer(ctx context.Context, name string, spec map[string]any, hostCon
 	return created.ID, nil
 }
 
+// AppLabel names the app an app or worker container belongs to.
+const AppLabel = "hakobu.app"
+
+// AppOptions are what an app's containers (app and worker) have in common.
+type AppOptions struct {
+	App      string
+	Env      []string
+	Binds    []string
+	MemoryMB int64   // 0: no limit
+	CPUs     float64 // 0: no limit
+}
+
+func (o AppOptions) spec(imageTag string) (spec, hostConfig map[string]any) {
+	spec = map[string]any{"Image": imageTag, "Env": o.Env, "Labels": map[string]string{AppLabel: o.App}}
+	hostConfig = map[string]any{
+		"Binds": o.Binds,
+		// setuid binaries can't raise privileges inside the container.
+		"SecurityOpt": []string{"no-new-privileges"},
+	}
+	if o.MemoryMB > 0 {
+		hostConfig["Memory"] = o.MemoryMB << 20
+		hostConfig["MemorySwap"] = o.MemoryMB << 20 // no swap on top
+	}
+	if o.CPUs > 0 {
+		hostConfig["NanoCpus"] = int64(o.CPUs * 1e9)
+	}
+	return spec, hostConfig
+}
+
 // RunAppContainer starts an app container with no host port published; the
-// in-process proxy reaches it by its network IP.
-func RunAppContainer(ctx context.Context, imageTag, name string, env, binds []string) (string, error) {
-	return runContainer(ctx, name, map[string]any{"Image": imageTag, "Env": env}, map[string]any{"Binds": binds})
+// in-process proxy reaches it by its network IP. It isn't restarted until
+// KeepRestarting: a candidate that crashes stays exited, with its exit
+// reason, for the health check to see.
+func RunAppContainer(ctx context.Context, imageTag, name string, opts AppOptions) (string, error) {
+	spec, hostConfig := opts.spec(imageTag)
+	hostConfig["RestartPolicy"] = map[string]string{"Name": "no"}
+	return runContainer(ctx, name, spec, hostConfig)
+}
+
+// KeepRestarting has Docker restart the container whenever it stops, until
+// it's stopped on purpose.
+func KeepRestarting(ctx context.Context, name string) error {
+	respBody, status, err := dockerRequest(ctx, "POST", "/containers/"+url.PathEscape(name)+"/update",
+		map[string]any{"RestartPolicy": map[string]string{"Name": "unless-stopped"}})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("container update failed (%d): %s", status, respBody)
+	}
+	return nil
 }
 
 // RunWorkerContainer starts a worker from the app's image with a shell command.
-func RunWorkerContainer(ctx context.Context, imageTag, name, command string, env, binds []string) (string, error) {
-	spec := map[string]any{"Image": imageTag, "Env": env}
+func RunWorkerContainer(ctx context.Context, imageTag, name, command string, opts AppOptions) (string, error) {
+	spec, hostConfig := opts.spec(imageTag)
 	if command != "" {
 		spec["Cmd"] = []string{"sh", "-c", command}
 	}
-	return runContainer(ctx, name, spec, map[string]any{"Binds": binds})
+	return runContainer(ctx, name, spec, hostConfig)
 }
 
 // RunServiceContainer starts a hakobu-managed backing service (Postgres,
@@ -126,6 +184,73 @@ func RunServiceContainer(ctx context.Context, name, image string, env []string, 
 	return runContainer(ctx, name, map[string]any{"Image": image, "Env": env}, map[string]any{
 		"Binds": []string{name + "_data:" + mountPath},
 	})
+}
+
+// RunTunnelContainer runs cloudflared for the tunnel with the given token on
+// the edge network. socketDir, holding the panel's unix socket, is mounted
+// at /run/hakobu.
+func RunTunnelContainer(ctx context.Context, name, image, token, socketDir string) (string, error) {
+	if err := pullImageIfMissing(ctx, image); err != nil {
+		return "", fmt.Errorf("failed to pull image %q: %w", image, err)
+	}
+	return runContainer(ctx, name, map[string]any{
+		"Image": image,
+		"Cmd":   []string{"tunnel", "run"},
+		"Env":   []string{"TUNNEL_TOKEN=" + token},
+	}, map[string]any{
+		"NetworkMode": EdgeNetwork,
+		"Binds":       []string{socketDir + ":/run/hakobu:z"},
+		"SecurityOpt": []string{"no-new-privileges"},
+	})
+}
+
+// ConnectEdge puts a container on the edge network under alias; a no-op if
+// it's there already. Joining a second network leaves the container's
+// connections on the first one alone.
+func ConnectEdge(ctx context.Context, container, alias string) error {
+	info, err := inspect(ctx, container)
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return fmt.Errorf("container %q not found", container)
+	}
+	if _, ok := info.NetworkSettings.Networks[EdgeNetwork]; ok {
+		return nil
+	}
+	if err := ensureNetwork(ctx, EdgeNetwork); err != nil {
+		return err
+	}
+	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+EdgeNetwork+"/connect", map[string]any{
+		"Container": container, "EndpointConfig": map[string]any{"Aliases": []string{alias}},
+	})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("connecting %s to %s failed (%d): %s", container, EdgeNetwork, status, respBody)
+	}
+	return nil
+}
+
+// DisconnectEdge takes a container off the edge network, so the tunnel
+// sends it no new requests; a no-op if it isn't on it.
+func DisconnectEdge(ctx context.Context, container string) error {
+	info, err := inspect(ctx, container)
+	if err != nil || info == nil {
+		return err
+	}
+	if _, ok := info.NetworkSettings.Networks[EdgeNetwork]; !ok {
+		return nil
+	}
+	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+EdgeNetwork+"/disconnect", map[string]any{"Container": container})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("disconnecting %s from %s failed (%d): %s", container, EdgeNetwork, status, respBody)
+	}
+	return nil
 }
 
 // StopContainer stops a container but keeps it, so it can be started again;
@@ -209,7 +334,12 @@ func pullImageIfMissing(ctx context.Context, image string) error {
 // HTTPCheck GETs url. With requireOK, only a 2xx counts as healthy; without
 // it any response does (the app may never have handled a bare "/").
 func HTTPCheck(url string, requireOK bool) bool {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		// The app answers for itself; following its redirects would let it
+		// point hakobu at anything reachable from the host.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		return false
@@ -336,8 +466,10 @@ type containerInfo struct {
 		Env []string `json:"Env"`
 	} `json:"Config"`
 	State struct {
-		Status string `json:"Status"`
-		Pid    int    `json:"Pid"`
+		Status    string `json:"Status"`
+		Pid       int    `json:"Pid"`
+		OOMKilled bool   `json:"OOMKilled"`
+		ExitCode  int    `json:"ExitCode"`
 	} `json:"State"`
 	RestartCount    int `json:"RestartCount"`
 	NetworkSettings struct {
@@ -478,17 +610,60 @@ func ContainerIP(ctx context.Context, containerName string) (string, error) {
 	return n.IPAddress, nil
 }
 
-// ContainerStatus returns docker's state ("running", "exited", ...) or
-// "not found", plus the restart count (surfaces crash loops).
-func ContainerStatus(ctx context.Context, containerName string) (status string, restarts int) {
+// State is what the panel shows about a container.
+type State struct {
+	Status    string // docker's state ("running", "exited", ...), "not found" or "unknown"
+	Restarts  int    // surfaces crash loops
+	OOMKilled bool   // the last exit was the kernel killing it for memory
+}
+
+func ContainerState(ctx context.Context, containerName string) State {
 	info, err := inspect(ctx, containerName)
 	if err != nil {
-		return "unknown", 0
+		return State{Status: "unknown"}
 	}
 	if info == nil {
-		return "not found", 0
+		return State{Status: "not found"}
 	}
-	return info.State.Status, info.RestartCount
+	return State{Status: info.State.Status, Restarts: info.RestartCount, OOMKilled: info.State.OOMKilled}
+}
+
+// ContainerStatus is ContainerState's status and restart count.
+func ContainerStatus(ctx context.Context, containerName string) (status string, restarts int) {
+	st := ContainerState(ctx, containerName)
+	return st.Status, st.Restarts
+}
+
+// WatchOOM calls fn for every container the kernel kills for running out of
+// memory, until ctx ends or the event stream breaks. app is the container's
+// AppLabel, "" for containers hakobu didn't label.
+func WatchOOM(ctx context.Context, fn func(container, app string)) error {
+	filters, _ := json.Marshal(map[string][]string{"type": {"container"}, "event": {"oom"}})
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/events?filters="+url.QueryEscape(string(filters)), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := dockerClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("events failed (%d): %s", resp.StatusCode, body)
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev struct {
+			Actor struct {
+				Attributes map[string]string `json:"Attributes"`
+			} `json:"Actor"`
+		}
+		if err := dec.Decode(&ev); err != nil {
+			return err
+		}
+		fn(ev.Actor.Attributes["name"], ev.Actor.Attributes[AppLabel])
+	}
 }
 
 // TagImage points targetRef ("repo:tag") at sourceRef's image.

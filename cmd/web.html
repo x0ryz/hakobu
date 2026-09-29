@@ -342,7 +342,7 @@ function envEditor(seed, suggestURL) {
 {{define "app-status"}}
 <span id="app-status" hx-get="/apps/{{.Name}}/status" hx-trigger="every 3s" hx-swap="outerHTML" class="inline-flex items-center gap-1.5 text-xs text-dim">
   {{if .Deploying}}<span class="w-2 h-2 rounded-full bg-accent animate-pulse"></span>deploying…
-  {{else}}{{template "status-dot" .Status}}{{.Status}}{{if gt .Restarts 0}} <span class="text-warn">· {{.Restarts}} restarts</span>{{end}}{{end}}
+  {{else}}{{template "status-dot" .Status}}{{.Status}}{{if .OOMKilled}} <span class="text-bad">· out of memory</span>{{end}}{{if gt .Restarts 0}} <span class="text-warn">· {{.Restarts}} restarts</span>{{end}}{{end}}
 </span>
 {{end}}
 
@@ -429,6 +429,19 @@ function envEditor(seed, suggestURL) {
     {{end}}
   </div>
 
+  <form hx-post="/apps/{{.App.Name}}/limits" class="card">
+    <div>
+      <h2 class="h2">Resource limits</h2>
+      <p class="text-xs text-faint">Caps for the app and its worker, each, so one app can't take the memory or CPU the others and the databases need. Empty means no limit. Applied on the next deploy.</p>
+    </div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div><label class="label">Memory, MB</label><input name="memory_mb" type="number" min="16" value="{{if .App.MemoryMB}}{{.App.MemoryMB}}{{end}}" placeholder="no limit" class="input w-full mono"></div>
+      <div><label class="label">CPUs</label><input name="cpus" type="number" min="0.01" step="0.01" value="{{if .App.Cpus}}{{.App.Cpus}}{{end}}" placeholder="no limit" class="input w-full mono"></div>
+    </div>
+    {{if .LastOOM}}<p class="text-sm text-bad">Last killed for running out of memory at <span class="mono">{{.LastOOM}}</span>; see the Errors tab.{{if .App.MemoryMB}} Raise the memory limit or reduce the app's usage.{{end}}</p>{{end}}
+    <button class="btn">Save</button>
+  </form>
+
   <div class="flex justify-end">
     <button hx-delete="/apps/{{.App.Name}}" hx-confirm="Delete app {{.App.Name}}? Its containers are removed{{if .Volumes}} and its volumes are deleted with their data{{end}}." class="btn-danger">Delete app</button>
   </div>
@@ -470,7 +483,7 @@ function envEditor(seed, suggestURL) {
 </div>
 
 <div x-show="tab==='errors'" x-cloak class="space-y-2">
-  <p class="text-xs text-faint">Errors and logs sent by a Sentry SDK using the injected <span class="mono">SENTRY_DSN</span>.</p>
+  <p class="text-xs text-faint">Errors and logs sent by a Sentry SDK using the injected <span class="mono">SENTRY_DSN</span>, and out-of-memory kills of the app and its worker.</p>
   <div hx-get="/apps/{{.App.Name}}/errors" hx-trigger="load" hx-swap="innerHTML"></div>
 </div>
 
@@ -532,7 +545,7 @@ function envEditor(seed, suggestURL) {
 <div class="space-y-2">
   {{range .}}
   <div class="console">
-    <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if eq .Kind "error"}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
+    <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if or (eq .Kind "error") (eq .Kind "oom")}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
     <p class="mt-1">{{.Message}}</p>
   </div>
   {{else}}
@@ -562,24 +575,38 @@ function envEditor(seed, suggestURL) {
     </div>
   </div>
 
-  <div class="card">
+  <div id="backups" class="card" {{if .Job.Running}}hx-get="/databases/{{.DB.Name}}" hx-trigger="every 3s" hx-select="#backups" hx-swap="outerHTML"{{end}}>
     <div class="flex items-center justify-between">
       <h2 class="h2">Backups</h2>
-      {{if .DB.BackupStorage}}<button hx-post="/databases/{{.DB.Name}}/backups" class="btn">Back up now</button>{{end}}
+      {{if .DB.BackupStorage}}<button hx-post="/databases/{{.DB.Name}}/backups" class="btn" {{if .Job.Running}}disabled{{end}}>Back up now</button>{{end}}
     </div>
     <form hx-post="/databases/{{.DB.Name}}/backup-storage" class="flex gap-2 items-center">
       <select name="storage" class="input flex-1">
         <option value="">no backups</option>
-        {{range .Storages}}<option value="{{.Name}}" {{if eq .Name $.DB.BackupStorage}}selected{{end}}>daily to {{.Name}} ({{.Provider}} · {{.Bucket}})</option>{{end}}
+        {{range .Storages}}<option value="{{.Name}}" {{if eq .Name $.DB.BackupStorage}}selected{{end}}>daily to {{.Name}} ({{.Provider}} · {{.Bucket}}){{if eq .Provider "rustfs"}} · same server{{end}}</option>{{end}}
       </select>
       <button class="btn">Save</button>
     </form>
     {{if not .Storages}}<p class="text-xs text-faint">Add a storage to the project to enable backups.</p>{{end}}
+    {{if .SameServer}}<p class="text-sm text-warn">These backups are stored on this same server (RustFS). They help against a bad migration or a deleted table, but a failed disk or a lost server takes the database and its backups together. Use Cloudflare R2 or another S3 storage for real backups.</p>{{end}}
+    {{if .DB.BackupStorage}}<p class="text-xs text-faint">Each backup is restored into a temporary database right after upload to prove it works (it needs as much free disk as the database). Hakobu keeps the last {{.Keep}} backups, one a week for four weeks, and always the newest one that restored.</p>{{end}}
+    {{with .Job}}
+    {{if .Running}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> {{$.DB.Name}} is {{.Running}}…</p>
+    {{else if .Last}}<p class="text-xs {{if .Failed}}text-bad{{else}}text-faint{{end}}">Last: {{.Last}}</p>{{end}}
+    {{end}}
     <div class="space-y-1.5">
       {{range .Backups}}
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="mono truncate" title="{{.ObjectKey}}">{{.CreatedAt}} · {{mb .SizeBytes}}</span>
-        <button hx-post="/databases/{{$.DB.Name}}/restore" hx-vals='{"object_key": "{{.ObjectKey}}"}' hx-confirm="Restore this backup into {{$.DB.Name}}? If existing rows conflict, the restore fails and nothing changes." class="link">Restore</button>
+        <span class="flex items-center gap-2 min-w-0">
+          <span class="mono truncate" title="{{.ObjectKey}}">{{.CreatedAt}} · {{mb .SizeBytes}}</span>
+          {{if not .VerifiedAt}}<span class="text-faint">not checked</span>
+          {{else if .VerifyError}}<span class="text-bad truncate" title="{{.VerifyError}}">✕ doesn't restore: {{.VerifyError}}</span>
+          {{else}}<span class="text-good" title="checked {{.VerifiedAt}}">✓ restores · {{.Tables}} tables</span>{{end}}
+        </span>
+        <span class="flex gap-3 shrink-0">
+          <button hx-post="/databases/{{$.DB.Name}}/backups/{{.ID}}/verify" class="link" {{if $.Job.Running}}disabled{{end}}>Check</button>
+          <button hx-post="/databases/{{$.DB.Name}}/backups/{{.ID}}/restore" hx-confirm="Restore this backup into {{$.DB.Name}}? If existing rows conflict, the restore fails and nothing changes." class="link" {{if $.Job.Running}}disabled{{end}}>Restore</button>
+        </span>
       </div>
       {{end}}
     </div>

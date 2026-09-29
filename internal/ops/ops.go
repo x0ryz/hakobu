@@ -14,6 +14,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/detect"
 	"github.com/x0ryz/hakobu/internal/github"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -28,7 +29,7 @@ func RandomHex(n int) (string, error) {
 // Names end up in container names, URLs, bucket names and Postgres
 // identifiers, so they are restricted to what all of those accept.
 var (
-	validName   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// Database names are always double-quoted in SQL, where dashes are fine.
 	validDBName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 )
@@ -168,6 +169,9 @@ func DeleteApp(s *store.Store, name string) error {
 			return err
 		}
 	}
+	if err := SyncTunnel(s); err != nil {
+		fmt.Println("tunnel routes not updated (retrying):", err)
+	}
 	return nil
 }
 
@@ -226,13 +230,13 @@ func baseEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 		env = append(env, storageEnv(st)...)
 	}
 	if host := config.PublicHost(); host != "" {
-		key := app.SentryKey
+		key := string(app.SentryKey)
 		if key == "" {
 			var err error
 			if key, err = RandomHex(16); err != nil {
 				return nil, err
 			}
-			if err := s.SetAppSentryKey(ctx(), store.SetAppSentryKeyParams{Name: app.Name, SentryKey: key}); err != nil {
+			if err := s.SetAppSentryKey(ctx(), store.SetAppSentryKeyParams{Name: app.Name, SentryKey: secret.String(key)}); err != nil {
 				return nil, err
 			}
 		}
@@ -242,7 +246,7 @@ func baseEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(p.SharedEnv)...), nil
+	return append(env, ParseEnv(string(p.SharedEnv))...), nil
 }
 
 // AppEnv is the environment of the app's next deploy.
@@ -255,7 +259,7 @@ func appEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(app.Env)...), nil
+	return append(env, ParseEnv(string(app.Env))...), nil
 }
 
 func WorkerEnv(s *store.Store, app store.App, w store.Worker) ([]string, error) {
@@ -263,7 +267,7 @@ func WorkerEnv(s *store.Store, app store.App, w store.Worker) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(w.Env)...), nil
+	return append(env, ParseEnv(string(w.Env))...), nil
 }
 
 // ParseEnv turns "KEY=value" lines into a docker env slice, skipping blank
@@ -295,7 +299,7 @@ func repoToken(s *store.Store, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return github.RepoToken(app.AppID, app.PrivateKey, repo)
+	return github.RepoToken(app.AppID, string(app.PrivateKey), repo)
 }
 
 func ListRepos(s *store.Store) ([]string, error) {
@@ -303,7 +307,7 @@ func ListRepos(s *store.Store) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	repos, err := github.ListRepos(app.AppID, app.PrivateKey)
+	repos, err := github.ListRepos(app.AppID, string(app.PrivateKey))
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,8 @@ package store
 
 import (
 	"context"
+
+	"github.com/x0ryz/hakobu/internal/secret"
 )
 
 const addVolume = `-- name: AddVolume :exec
@@ -109,21 +111,29 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) error {
 	return err
 }
 
-const createBackup = `-- name: CreateBackup :exec
+const createBackup = `-- name: CreateBackup :one
 
-INSERT INTO backups (database, object_key, size_bytes) VALUES (?, ?, ?)
+INSERT INTO backups (database, storage, object_key, size_bytes) VALUES (?, ?, ?, ?) RETURNING id
 `
 
 type CreateBackupParams struct {
 	Database  string
+	Storage   string
 	ObjectKey string
 	SizeBytes int64
 }
 
 // Backups
-func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) error {
-	_, err := q.db.ExecContext(ctx, createBackup, arg.Database, arg.ObjectKey, arg.SizeBytes)
-	return err
+func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, createBackup,
+		arg.Database,
+		arg.Storage,
+		arg.ObjectKey,
+		arg.SizeBytes,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const createDatabase = `-- name: CreateDatabase :exec
@@ -135,7 +145,7 @@ type CreateDatabaseParams struct {
 	Name      string
 	ProjectID int64
 	User      string
-	Password  string
+	Password  secret.String
 }
 
 // Databases
@@ -207,7 +217,7 @@ type CreateStorageParams struct {
 	AccountID       string
 	Endpoint        string
 	AccessKeyID     string
-	SecretAccessKey string
+	SecretAccessKey secret.String
 	Bucket          string
 	Region          string
 }
@@ -286,6 +296,24 @@ DELETE FROM apps WHERE name = ?
 
 func (q *Queries) DeleteApp(ctx context.Context, name string) error {
 	_, err := q.db.ExecContext(ctx, deleteApp, name)
+	return err
+}
+
+const deleteBackup = `-- name: DeleteBackup :exec
+DELETE FROM backups WHERE id = ?
+`
+
+func (q *Queries) DeleteBackup(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteBackup, id)
+	return err
+}
+
+const deleteBackupsOf = `-- name: DeleteBackupsOf :exec
+DELETE FROM backups WHERE database = ?
+`
+
+func (q *Queries) DeleteBackupsOf(ctx context.Context, database string) error {
+	_, err := q.db.ExecContext(ctx, deleteBackupsOf, database)
 	return err
 }
 
@@ -405,7 +433,7 @@ func (q *Queries) GetAccessControl(ctx context.Context) (AccessControl, error) {
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE name = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE name = ?
 `
 
 func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
@@ -432,12 +460,14 @@ func (q *Queries) GetApp(ctx context.Context, name string) (App, error) {
 		&i.LinkedDB,
 		&i.LinkedStorage,
 		&i.ShareVolumes,
+		&i.MemoryMB,
+		&i.Cpus,
 	)
 	return i, err
 }
 
 const getAppByDomain = `-- name: GetAppByDomain :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE domain = ? AND domain != ''
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE domain = ? AND domain != ''
 `
 
 func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error) {
@@ -464,12 +494,14 @@ func (q *Queries) GetAppByDomain(ctx context.Context, domain string) (App, error
 		&i.LinkedDB,
 		&i.LinkedStorage,
 		&i.ShareVolumes,
+		&i.MemoryMB,
+		&i.Cpus,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE id = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE id = ?
 `
 
 func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
@@ -496,6 +528,29 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 		&i.LinkedDB,
 		&i.LinkedStorage,
 		&i.ShareVolumes,
+		&i.MemoryMB,
+		&i.Cpus,
+	)
+	return i, err
+}
+
+const getBackup = `-- name: GetBackup :one
+SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE id = ?
+`
+
+func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
+	row := q.db.QueryRowContext(ctx, getBackup, id)
+	var i Backup
+	err := row.Scan(
+		&i.ID,
+		&i.Database,
+		&i.ObjectKey,
+		&i.SizeBytes,
+		&i.CreatedAt,
+		&i.Storage,
+		&i.VerifiedAt,
+		&i.VerifyError,
+		&i.Tables,
 	)
 	return i, err
 }
@@ -629,6 +684,59 @@ func (q *Queries) GetWorker(ctx context.Context, appName string) (Worker, error)
 	return i, err
 }
 
+const lastTelemetryOfKind = `-- name: LastTelemetryOfKind :one
+SELECT created_at FROM telemetry_events WHERE app_name = ? AND kind = ? ORDER BY id DESC LIMIT 1
+`
+
+type LastTelemetryOfKindParams struct {
+	AppName string
+	Kind    string
+}
+
+func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKindParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lastTelemetryOfKind, arg.AppName, arg.Kind)
+	var created_at string
+	err := row.Scan(&created_at)
+	return created_at, err
+}
+
+const listAllBackups = `-- name: ListAllBackups :many
+SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
+`
+
+func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup, error) {
+	rows, err := q.db.QueryContext(ctx, listAllBackups, database)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Backup
+	for rows.Next() {
+		var i Backup
+		if err := rows.Scan(
+			&i.ID,
+			&i.Database,
+			&i.ObjectKey,
+			&i.SizeBytes,
+			&i.CreatedAt,
+			&i.Storage,
+			&i.VerifiedAt,
+			&i.VerifyError,
+			&i.Tables,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllVolumes = `-- name: ListAllVolumes :many
 SELECT app_name, name, mount_path FROM volumes
 `
@@ -657,7 +765,7 @@ func (q *Queries) ListAllVolumes(ctx context.Context) ([]Volume, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view ORDER BY name
 `
 
 func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
@@ -690,6 +798,8 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 			&i.LinkedDB,
 			&i.LinkedStorage,
 			&i.ShareVolumes,
+			&i.MemoryMB,
+			&i.Cpus,
 		); err != nil {
 			return nil, err
 		}
@@ -705,7 +815,7 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 }
 
 const listAppsByProject = `-- name: ListAppsByProject :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE project_id = ? ORDER BY name
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE project_id = ? ORDER BY name
 `
 
 func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App, error) {
@@ -738,6 +848,8 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 			&i.LinkedDB,
 			&i.LinkedStorage,
 			&i.ShareVolumes,
+			&i.MemoryMB,
+			&i.Cpus,
 		); err != nil {
 			return nil, err
 		}
@@ -753,7 +865,7 @@ func (q *Queries) ListAppsByProject(ctx context.Context, projectID int64) ([]App
 }
 
 const listAppsByRepo = `-- name: ListAppsByRepo :many
-SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes FROM app_view WHERE repo = ?
+SELECT id, project_id, project_name, name, repo, domain, dns_zone_id, dns_record_id, port, container_port, live_port, build_path, build_strategy, active_slot, env, sentry_key, health_check_path, linked_db, linked_storage, share_volumes, memory_mb, cpus FROM app_view WHERE repo = ?
 `
 
 func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error) {
@@ -786,6 +898,8 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 			&i.LinkedDB,
 			&i.LinkedStorage,
 			&i.ShareVolumes,
+			&i.MemoryMB,
+			&i.Cpus,
 		); err != nil {
 			return nil, err
 		}
@@ -801,7 +915,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, "database", object_key, size_bytes, created_at FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
+SELECT id, "database", object_key, size_bytes, created_at, storage, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -824,6 +938,10 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 			&i.ObjectKey,
 			&i.SizeBytes,
 			&i.CreatedAt,
+			&i.Storage,
+			&i.VerifiedAt,
+			&i.VerifyError,
+			&i.Tables,
 		); err != nil {
 			return nil, err
 		}
@@ -1098,8 +1216,8 @@ ON CONFLICT(id) DO UPDATE SET access_token = excluded.access_token, refresh_toke
 `
 
 type SaveCloudflareTokenParams struct {
-	AccessToken  string
-	RefreshToken string
+	AccessToken  secret.String
+	RefreshToken secret.String
 	ExpiresAt    string
 }
 
@@ -1115,7 +1233,7 @@ UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zon
 type SaveCloudflareTunnelParams struct {
 	AccountID     string
 	TunnelID      string
-	TunnelToken   string
+	TunnelToken   secret.String
 	PanelZoneID   string
 	PanelRecordID string
 }
@@ -1140,10 +1258,10 @@ VALUES (1, ?, ?, ?, ?, ?, ?)
 type SaveGitHubAppParams struct {
 	AppID         int64
 	Slug          string
-	PrivateKey    string
-	WebhookSecret string
+	PrivateKey    secret.String
+	WebhookSecret secret.String
 	ClientID      string
-	ClientSecret  string
+	ClientSecret  secret.String
 }
 
 // GitHub App and access control
@@ -1169,7 +1287,7 @@ type SaveWorkerParams struct {
 	AppName string
 	Name    string
 	Command string
-	Env     string
+	Env     secret.String
 }
 
 // Workers
@@ -1219,12 +1337,27 @@ UPDATE apps SET env = ? WHERE name = ?
 `
 
 type SetAppEnvParams struct {
-	Env  string
+	Env  secret.String
 	Name string
 }
 
 func (q *Queries) SetAppEnv(ctx context.Context, arg SetAppEnvParams) error {
 	_, err := q.db.ExecContext(ctx, setAppEnv, arg.Env, arg.Name)
+	return err
+}
+
+const setAppLimits = `-- name: SetAppLimits :exec
+UPDATE apps SET memory_mb = ?, cpus = ? WHERE name = ?
+`
+
+type SetAppLimitsParams struct {
+	MemoryMB int64
+	Cpus     float64
+	Name     string
+}
+
+func (q *Queries) SetAppLimits(ctx context.Context, arg SetAppLimitsParams) error {
+	_, err := q.db.ExecContext(ctx, setAppLimits, arg.MemoryMB, arg.Cpus, arg.Name)
 	return err
 }
 
@@ -1276,7 +1409,7 @@ UPDATE apps SET sentry_key = ? WHERE name = ?
 `
 
 type SetAppSentryKeyParams struct {
-	SentryKey string
+	SentryKey secret.String
 	Name      string
 }
 
@@ -1314,6 +1447,27 @@ func (q *Queries) SetAppShareVolumes(ctx context.Context, arg SetAppShareVolumes
 	return err
 }
 
+const setBackupVerified = `-- name: SetBackupVerified :exec
+UPDATE backups SET verified_at = ?, verify_error = ?, tables = ? WHERE id = ?
+`
+
+type SetBackupVerifiedParams struct {
+	VerifiedAt  string
+	VerifyError string
+	Tables      int64
+	ID          int64
+}
+
+func (q *Queries) SetBackupVerified(ctx context.Context, arg SetBackupVerifiedParams) error {
+	_, err := q.db.ExecContext(ctx, setBackupVerified,
+		arg.VerifiedAt,
+		arg.VerifyError,
+		arg.Tables,
+		arg.ID,
+	)
+	return err
+}
+
 const setDatabaseBackupStorage = `-- name: SetDatabaseBackupStorage :exec
 UPDATE databases SET backup_storage = ? WHERE name = ?
 `
@@ -1343,7 +1497,7 @@ UPDATE projects SET shared_env = ? WHERE name = ?
 `
 
 type SetProjectSharedEnvParams struct {
-	SharedEnv string
+	SharedEnv secret.String
 	Name      string
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -71,7 +72,7 @@ func CreateDatabase(s *store.Store, projectName, name string) error {
 			return err
 		}
 	}
-	return s.CreateDatabase(ctx(), store.CreateDatabaseParams{ProjectID: p.ID, Name: name, User: user, Password: password})
+	return s.CreateDatabase(ctx(), store.CreateDatabaseParams{ProjectID: p.ID, Name: name, User: user, Password: secret.String(password)})
 }
 
 func DeleteDatabase(s *store.Store, name string) error {
@@ -79,6 +80,14 @@ func DeleteDatabase(s *store.Store, name string) error {
 	if err != nil {
 		return fmt.Errorf("database %q not found: %w", name, err)
 	}
+	if err := reserveDB(name, "being deleted"); err != nil {
+		return err
+	}
+	defer func() {
+		dbJobsMu.Lock()
+		delete(dbJobs, name)
+		dbJobsMu.Unlock()
+	}()
 	linked, err := s.AppsUsingDatabase(ctx(), name)
 	if err != nil {
 		return err
@@ -94,6 +103,11 @@ func DeleteDatabase(s *store.Store, name string) error {
 			return err
 		}
 	}
+	// The files stay in the storage; a new database with the same name
+	// mustn't list (and rotate away) the old one's backups.
+	if err := s.DeleteBackupsOf(ctx(), name); err != nil {
+		return err
+	}
 	return s.DeleteDatabase(ctx(), name)
 }
 
@@ -108,6 +122,6 @@ func DatabaseEnv(d store.Database) []string {
 		"POSTGRES_PORT=5432",
 		"POSTGRES_DB=" + d.Name,
 		"POSTGRES_USER=" + d.User,
-		"POSTGRES_PASSWORD=" + d.Password,
+		"POSTGRES_PASSWORD=" + string(d.Password),
 	}
 }

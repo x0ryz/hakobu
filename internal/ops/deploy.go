@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -134,20 +135,17 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		if err := build.CloneRepo(github.CloneURL(app.Repo), token, workDir, out); err != nil {
 			return fmt.Errorf("clone failed: %w", err)
 		}
-		buildDir := workDir
-		if p := strings.Trim(app.BuildPath, "/"); p != "" && p != "." {
-			if strings.Contains(p, "..") {
-				return fmt.Errorf("invalid build path %q", app.BuildPath)
-			}
-			buildDir += "/" + p
+		dir, err := buildDir(workDir, app.BuildPath)
+		if err != nil {
+			return err
 		}
 
 		next := nextImageTag(app)
 		// Drops the :next tag in every case: a failed build or health check
 		// leaves nothing behind, a successful one is :latest by then.
 		defer deploy.RemoveImage(ctx(), next)
-		fmt.Fprintf(out, "building %s from %s (%s)\n", next, buildDir, app.BuildStrategy)
-		if err := build.BuildWithStrategy(buildDir, next, app.BuildStrategy, out); err != nil {
+		fmt.Fprintf(out, "building %s from %s (%s)\n", next, dir, app.BuildStrategy)
+		if err := build.BuildWithStrategy(dir, next, app.BuildStrategy, out); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 		if err := rollOut(s, app, next, out); err != nil {
@@ -163,6 +161,24 @@ func StartDeploy(s *store.Store, appName, trigger string) error {
 		}
 		return nil
 	})
+}
+
+// buildDir resolves the app's build path inside the clone. Symlinks are
+// resolved first: a repo could otherwise make its build path point at a
+// host directory and have it copied into the image.
+func buildDir(clone, buildPath string) (string, error) {
+	root, err := filepath.EvalSymlinks(clone)
+	if err != nil {
+		return "", err
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Join(root, strings.Trim(buildPath, "/")))
+	if err != nil {
+		return "", fmt.Errorf("build path %q not found in the repo", buildPath)
+	}
+	if dir != root && !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid build path %q: it leads outside the repo", buildPath)
+	}
+	return dir, nil
 }
 
 // promote makes the :next build that just went live :latest; the image it
@@ -249,7 +265,7 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	}
 
 	fmt.Fprintln(out, "starting", candidate)
-	if _, err := deploy.RunAppContainer(ctx(), imageTag, candidate, env, binds); err != nil {
+	if _, err := deploy.RunAppContainer(ctx(), imageTag, candidate, appOptions(app, env, binds)); err != nil {
 		restoreOld()
 		return err
 	}
@@ -269,11 +285,11 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 
 	var port int64
 	var loopbackOnly []int
-	var crashed bool
+	var crashed, oom bool
 	healthy := deploy.WaitHealthy(60, time.Second, func() bool {
 		// A container that exits or restarts will never answer; stop waiting.
-		if status, restarts := deploy.ContainerStatus(ctx(), candidate); status == "exited" || status == "dead" || restarts > 0 {
-			crashed = true
+		if st := deploy.ContainerState(ctx(), candidate); st.Status == "exited" || st.Status == "dead" || st.Restarts > 0 || st.OOMKilled {
+			crashed, oom = true, st.OOMKilled
 			return true
 		}
 		port = app.ContainerPort
@@ -290,6 +306,8 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		restoreOld()
 		reason := fmt.Sprintf("didn't answer on port %d within 60s", port)
 		switch {
+		case oom:
+			reason = "was killed: " + oomText(app)
 		case crashed:
 			reason = "exited while starting (see its output below; a missing variable or an unreachable database are the usual causes)"
 		case port == 0 && len(loopbackOnly) > 0:
@@ -306,6 +324,18 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		return fmt.Errorf("new version %s; %s\n--- container output ---\n%s", reason, kept, logs)
 	}
 
+	// Healthy: keep it running, and let the tunnel find it under the app's
+	// alias next to the old version.
+	for _, step := range []func() error{
+		func() error { return deploy.KeepRestarting(ctx(), candidate) },
+		func() error { return deploy.ConnectEdge(ctx(), candidate, EdgeAlias(app.Name)) },
+	} {
+		if err := step(); err != nil {
+			deploy.RemoveContainer(ctx(), candidate)
+			restoreOld()
+			return err
+		}
+	}
 	if _, err := proxy.Ensure(app.Name, app.Port); err != nil {
 		return err
 	}
@@ -316,7 +346,16 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	if err := s.SetAppLive(ctx(), store.SetAppLiveParams{Name: app.Name, ActiveSlot: newSlot, LivePort: port}); err != nil {
 		return err
 	}
-	if err := deploy.RemoveContainer(ctx(), app.Name+"-"+oldSlot); err != nil {
+	if err := SyncTunnel(s); err != nil {
+		fmt.Fprintln(out, "warning: failed to update the tunnel's routes, retrying in the background:", err)
+	}
+	// The old version gets no new requests, then up to 10 seconds to
+	// finish the ones in flight.
+	if err := deploy.DisconnectEdge(ctx(), old); err != nil {
+		fmt.Fprintln(out, "warning:", err)
+	}
+	deploy.StopContainer(ctx(), old)
+	if err := deploy.RemoveContainer(ctx(), old); err != nil {
 		fmt.Fprintln(out, "warning: failed to remove previous container:", err)
 	}
 	fmt.Fprintf(out, "live: container port %d, 127.0.0.1:%d (%s)\n", port, app.Port, imageTag)
@@ -393,8 +432,12 @@ func runWorker(s *store.Store, app store.App, w store.Worker, out io.Writer) err
 		return err
 	}
 	fmt.Fprintln(out, "starting worker", w.ContainerName())
-	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), w.Command, env, binds)
+	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), w.Command, appOptions(app, env, binds))
 	return err
+}
+
+func appOptions(app store.App, env, binds []string) deploy.AppOptions {
+	return deploy.AppOptions{App: app.Name, Env: env, Binds: binds, MemoryMB: app.MemoryMB, CPUs: app.Cpus}
 }
 
 // SaveWorker creates or updates the app's worker and restarts it if the

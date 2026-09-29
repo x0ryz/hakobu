@@ -19,3 +19,34 @@ sql:
           linked_db: LinkedDB
           trigger_source: Trigger
           github_login: GitHubLogin
+          memory_mb: MemoryMB
+        # Secrets are encrypted in the database (internal/secret).
+        overrides:
+          - column: projects.shared_env
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: apps.env
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: apps.sentry_key
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: app_view.env
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: app_view.sentry_key
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: workers.env
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: databases.db_password
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: storages.secret_access_key
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: github_app.private_key
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: github_app.webhook_secret
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: github_app.client_secret
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: cloudflare.access_token
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: cloudflare.refresh_token
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: cloudflare.tunnel_token
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}

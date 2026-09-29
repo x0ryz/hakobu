@@ -192,12 +192,25 @@ func (c Client) CreateTunnel(accountID, name, service string) (id, token string,
 	if err := c.call("POST", "/accounts/"+accountID+"/cfd_tunnel", map[string]any{"name": name, "config_src": "cloudflare"}, &t); err != nil {
 		return "", "", err
 	}
-	config := map[string]any{"config": map[string]any{"ingress": []map[string]string{{"service": service}}}}
-	if err := c.call("PUT", "/accounts/"+accountID+"/cfd_tunnel/"+t.ID+"/configurations", config, nil); err != nil {
+	if err := c.SetIngress(accountID, t.ID, []IngressRule{{Service: service}}); err != nil {
 		return "", "", err
 	}
 	err = c.call("GET", "/accounts/"+accountID+"/cfd_tunnel/"+t.ID+"/token", nil, &token)
 	return t.ID, token, err
+}
+
+// IngressRule sends requests for Hostname (any, if empty) to Service. The
+// last rule must have no hostname.
+type IngressRule struct {
+	Hostname string `json:"hostname,omitempty"`
+	Service  string `json:"service"`
+}
+
+// SetIngress replaces the tunnel's routing; cloudflared picks it up within
+// seconds.
+func (c Client) SetIngress(accountID, tunnelID string, rules []IngressRule) error {
+	return c.call("PUT", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations",
+		map[string]any{"config": map[string]any{"ingress": rules}}, nil)
 }
 
 // RouteHost points host at the tunnel with a proxied CNAME and returns the record ID.

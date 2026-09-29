@@ -17,6 +17,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/github"
 	"github.com/x0ryz/hakobu/internal/ops"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -36,18 +37,39 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	},
 }).Parse(templatesSrc))
 
+// Cookies use the __Host- prefix: apps live on sibling subdomains of the
+// panel, and the prefix stops them from planting cookies for it.
 const (
-	sessionCookie    = "hakobu_session"
-	setupCookie      = "hakobu_setup"
-	manifestCookie   = "hakobu_gh_state"
-	oauthStateCookie = "hakobu_oauth_state"
+	sessionCookie    = "__Host-hakobu_session"
+	setupCookie      = "__Host-hakobu_setup"
+	manifestCookie   = "__Host-hakobu_gh_state"
+	oauthStateCookie = "__Host-hakobu_oauth_state"
 	sessionTTL       = 30 * 24 * time.Hour
 )
 
-func setCookie(w http.ResponseWriter, r *http.Request, name, value string, maxAge int) {
+func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: value, Path: "/", MaxAge: maxAge,
-		HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// panelHandler guards the panel against other sites. Apps are served from
+// subdomains of the same domain, which SameSite cookies treat as the same
+// site, so state-changing requests must also come from the panel's own
+// origin. The webhook and the Sentry endpoint are called cross-origin on
+// purpose and check their own secrets.
+func panelHandler(mux http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.AddInsecureBypassPattern("POST /webhook/github")
+	cop.AddInsecureBypassPattern("POST /api/{app_id}/envelope/")
+	h := cop.Handler(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		h.ServeHTTP(w, r)
 	})
 }
 
@@ -90,7 +112,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 						h(w, r)
 						return
 					}
-					s.DeleteSession(r.Context(), c.Value)
+					s.EndSession(r.Context(), c.Value)
 				}
 			}
 			if r.Header.Get("HX-Request") == "true" {
@@ -152,7 +174,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /projects/{p}/env", func(r *http.Request) (string, error) {
-		return "", s.SetProjectSharedEnv(r.Context(), store.SetProjectSharedEnvParams{Name: r.PathValue("p"), SharedEnv: r.FormValue("env")})
+		return "", s.SetProjectSharedEnv(r.Context(), store.SetProjectSharedEnvParams{Name: r.PathValue("p"), SharedEnv: secret.String(r.FormValue("env"))})
 	})
 
 	handle("GET /projects/{p}/new-app", func(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +230,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			AccountID:       strings.TrimSpace(r.FormValue("account_id")),
 			Endpoint:        strings.TrimSpace(r.FormValue("endpoint")),
 			AccessKeyID:     strings.TrimSpace(r.FormValue("access_key_id")),
-			SecretAccessKey: strings.TrimSpace(r.FormValue("secret_access_key")),
+			SecretAccessKey: secret.String(strings.TrimSpace(r.FormValue("secret_access_key"))),
 			Bucket:          strings.TrimSpace(r.FormValue("bucket")),
 			Region:          strings.TrimSpace(r.FormValue("region")),
 		})
@@ -247,6 +269,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		data["Sub"], data["Zone"] = splitDomain(app.Domain, data["Zones"].([]string))
 		data["Volumes"], _ = s.ListVolumes(r.Context(), app.Name)
+		data["LastOOM"] = ops.LastOOM(s, app.Name)
 		if w, err := s.GetWorker(r.Context(), app.Name); err == nil {
 			data["Worker"] = w
 			data["WorkerStatus"], _ = deploy.ContainerStatus(r.Context(), w.ContainerName())
@@ -307,6 +330,23 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		return "", ops.RemoveVolume(s, r.PathValue("a"), r.PathValue("v"))
 	})
 
+	action("POST /apps/{a}/limits", func(r *http.Request) (string, error) {
+		var memory int64
+		var cpus float64
+		var err error
+		if v := strings.TrimSpace(r.FormValue("memory_mb")); v != "" {
+			if memory, err = strconv.ParseInt(v, 10, 64); err != nil {
+				return "", fmt.Errorf("memory limit must be a whole number of MB")
+			}
+		}
+		if v := strings.TrimSpace(r.FormValue("cpus")); v != "" {
+			if cpus, err = strconv.ParseFloat(v, 64); err != nil {
+				return "", fmt.Errorf("CPU limit must be a number, e.g. 0.5")
+			}
+		}
+		return "", ops.SetLimits(s, r.PathValue("a"), memory, cpus)
+	})
+
 	action("POST /apps/{a}/share-volumes", func(r *http.Request) (string, error) {
 		return "", ops.SetShareVolumes(s, r.PathValue("a"), r.FormValue("share") != "")
 	})
@@ -320,7 +360,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /apps/{a}/env", func(r *http.Request) (string, error) {
-		return "", s.SetAppEnv(r.Context(), store.SetAppEnvParams{Name: r.PathValue("a"), Env: r.FormValue("env")})
+		return "", s.SetAppEnv(r.Context(), store.SetAppEnvParams{Name: r.PathValue("a"), Env: secret.String(r.FormValue("env"))})
 	})
 
 	handle("GET /apps/{a}/env/suggest", func(w http.ResponseWriter, r *http.Request) {
@@ -377,7 +417,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			AppName: r.PathValue("a"),
 			Name:    strings.TrimSpace(r.FormValue("name")),
 			Command: strings.TrimSpace(r.FormValue("command")),
-			Env:     r.FormValue("env"),
+			Env:     secret.String(r.FormValue("env")),
 		})
 	})
 
@@ -405,9 +445,14 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		storages, _ := s.ListStoragesByProject(r.Context(), d.ProjectID)
 		backups, _ := s.ListBackups(r.Context(), store.ListBackupsParams{Database: d.Name, Limit: 30})
 		usedBy, _ := s.AppsUsingDatabase(r.Context(), d.Name)
+		sameServer := false
+		for _, st := range storages {
+			sameServer = sameServer || (st.Name == d.BackupStorage && ops.SameServer(st))
+		}
 		render(w, "database", map[string]any{
 			"DB": d, "Project": project, "Ready": ops.DatabaseReady(), "Env": splitEnv(ops.DatabaseEnv(d)),
-			"Storages": storages, "Backups": backups, "UsedBy": usedBy,
+			"Storages": storages, "Backups": backups, "UsedBy": usedBy, "SameServer": sameServer,
+			"Job": ops.DatabaseJob(d.Name), "Keep": config.BackupKeep,
 		})
 	})
 
@@ -428,12 +473,20 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /databases/{d}/backups", func(r *http.Request) (string, error) {
-		return "", ops.BackupDatabase(s, r.PathValue("d"))
+		return "", ops.StartBackup(s, r.PathValue("d"))
 	})
 
-	action("POST /databases/{d}/restore", func(r *http.Request) (string, error) {
-		return "", ops.RestoreDatabase(s, r.PathValue("d"), r.FormValue("object_key"))
-	})
+	backupAction := func(pattern string, start func(*store.Store, string, int64) error) {
+		action(pattern, func(r *http.Request) (string, error) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil {
+				return "", fmt.Errorf("no such backup")
+			}
+			return "", start(s, r.PathValue("d"), id)
+		})
+	}
+	backupAction("POST /databases/{d}/backups/{id}/restore", ops.StartRestore)
+	backupAction("POST /databases/{d}/backups/{id}/verify", ops.StartVerify)
 
 	// Settings.
 
@@ -479,7 +532,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 				http.Error(w, "invalid setup link", http.StatusForbidden)
 				return
 			}
-			setCookie(w, r, setupCookie, token, 3600)
+			setCookie(w, setupCookie, token, 3600)
 			http.Redirect(w, r, "/setup", http.StatusSeeOther)
 			return
 		}
@@ -499,7 +552,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 				return
 			}
 			state, _ := ops.RandomHex(16)
-			setCookie(w, r, manifestCookie, state, 600)
+			setCookie(w, manifestCookie, state, 600)
 			data["Manifest"] = string(manifest)
 			data["State"] = state
 		}
@@ -511,15 +564,15 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			http.Error(w, "invalid or expired setup session, open the setup link again", http.StatusBadRequest)
 			return
 		}
-		setCookie(w, r, manifestCookie, "", -1)
+		setCookie(w, manifestCookie, "", -1)
 		mc, err := github.ConvertManifestCode(r.URL.Query().Get("code"))
 		if err != nil {
 			fail(w, err)
 			return
 		}
 		if err := s.SaveGitHubApp(r.Context(), store.SaveGitHubAppParams{
-			AppID: mc.ID, Slug: mc.Slug, PrivateKey: mc.PEM, WebhookSecret: mc.WebhookSecret,
-			ClientID: mc.ClientID, ClientSecret: mc.ClientSecret,
+			AppID: mc.ID, Slug: mc.Slug, PrivateKey: secret.String(mc.PEM), WebhookSecret: secret.String(mc.WebhookSecret),
+			ClientID: mc.ClientID, ClientSecret: secret.String(mc.ClientSecret),
 		}); err != nil {
 			fail(w, err)
 			return
@@ -539,7 +592,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			return
 		}
 		state, _ := ops.RandomHex(16)
-		setCookie(w, r, oauthStateCookie, state, 600)
+		setCookie(w, oauthStateCookie, state, 600)
 		http.Redirect(w, r, github.AuthorizeURL(app.ClientID, "https://"+config.PublicHost()+"/auth/callback", state), http.StatusSeeOther)
 	})
 
@@ -551,13 +604,13 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			deny("sign-in expired, try again")
 			return
 		}
-		setCookie(w, r, oauthStateCookie, "", -1)
+		setCookie(w, oauthStateCookie, "", -1)
 		app, err := s.GetGitHubApp(r.Context())
 		if err != nil {
 			deny("GitHub is not connected yet")
 			return
 		}
-		login, err := github.SignIn(app.ClientID, app.ClientSecret, r.URL.Query().Get("code"), "https://"+config.PublicHost()+"/auth/callback")
+		login, err := github.SignIn(app.ClientID, string(app.ClientSecret), r.URL.Query().Get("code"), "https://"+config.PublicHost()+"/auth/callback")
 		if err != nil {
 			fail(w, err)
 			return
@@ -578,7 +631,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 				return
 			}
 			config.ClearSetupToken()
-			setCookie(w, r, setupCookie, "", -1)
+			setCookie(w, setupCookie, "", -1)
 			owner = login
 		}
 		if !mayAccess(r.Context(), s, login) {
@@ -594,29 +647,27 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			fail(w, err)
 			return
 		}
-		setCookie(w, r, sessionCookie, id, int(sessionTTL.Seconds()))
+		setCookie(w, sessionCookie, id, int(sessionTTL.Seconds()))
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("GET /logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookie); err == nil {
-			s.DeleteSession(r.Context(), c.Value)
+			s.EndSession(r.Context(), c.Value)
 		}
-		setCookie(w, r, sessionCookie, "", -1)
+		setCookie(w, sessionCookie, "", -1)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	})
 }
 
 type appView struct {
 	store.App
-	Status    string
-	Restarts  int
+	deploy.State
 	Deploying bool
 }
 
 func newAppView(a store.App) appView {
-	status, restarts := deploy.ContainerStatus(context.Background(), a.ContainerName())
-	return appView{App: a, Status: status, Restarts: restarts, Deploying: ops.IsDeploying(a.Name)}
+	return appView{App: a, State: deploy.ContainerState(context.Background(), a.ContainerName()), Deploying: ops.IsDeploying(a.Name)}
 }
 
 type envVar struct{ Key, Value string }

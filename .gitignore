@@ -5,6 +5,7 @@
 
 # runtime data (sqlite, logs, cloned repos) — never commit
 /data/
+/run/
 *.db
 *.db-shm
 *.db-wal
