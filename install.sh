@@ -4,6 +4,12 @@
 # link to connect GitHub. Needs a domain on Cloudflare; the server needs no
 # public IP or open ports.
 #
+# hakobu runs as the unprivileged user "hakobu" with its own rootless Docker,
+# so neither a break-in into hakobu nor a container escape is root on the
+# server. Installs made before that keep running as root under the system
+# Docker (their containers and databases live there); this script only
+# updates their binary.
+#
 #   curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo bash
 #
 # Optional: HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
@@ -24,9 +30,20 @@ case "$(uname -m)" in
   *) echo "unsupported CPU architecture $(uname -m)"; exit 1 ;;
 esac
 
+UNIT=/etc/systemd/system/hakobu.service
+ROOTFUL=""
+if [ -f "$UNIT" ] && ! grep -q '^User=hakobu$' "$UNIT"; then
+  ROOTFUL=1
+fi
+
 echo "==> installing dependencies (docker, git, railpack)"
 command -v curl >/dev/null || { apt-get update && apt-get install -y curl; } || yum install -y curl
-command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
+HAD_DOCKER=""
+if command -v docker >/dev/null; then
+  HAD_DOCKER=1
+else
+  curl -fsSL https://get.docker.com | sh
+fi
 command -v git >/dev/null || { apt-get update && apt-get install -y git; } || yum install -y git
 # Railpack is pinned and checked like hakobu itself; hakobu starts the
 # BuildKit container it builds with (config/images.go) on the first build.
@@ -47,9 +64,90 @@ if [ "$(railpack --version 2>/dev/null | grep -o 'v\?[0-9][0-9.]*' | head -1 | s
   rm -rf "$TMP"
 fi
 
+if [ -z "$ROOTFUL" ]; then
+  echo "==> setting up rootless Docker for the hakobu user"
+  if command -v apt-get >/dev/null; then
+    apt-get install -y uidmap dbus-user-session docker-ce-rootless-extras >/dev/null
+  else
+    yum install -y shadow-utils docker-ce-rootless-extras >/dev/null
+  fi
+  if ! command -v dockerd-rootless-setuptool.sh >/dev/null; then
+    echo "rootless Docker isn't available: hakobu needs Docker's own packages (https://docs.docker.com/engine/install/), not the distribution's"
+    exit 1
+  fi
+  id hakobu >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/hakobu --shell /usr/sbin/nologin hakobu
+  HK_UID="$(id -u hakobu)"
+  HK_RUN="/run/user/$HK_UID"
+  # Subordinate IDs for the containers' users, after every range in use.
+  for f in /etc/subuid /etc/subgid; do
+    touch "$f"
+    if ! grep -q '^hakobu:' "$f"; then
+      echo "hakobu:$(awk -F: 'BEGIN { m = 100000 } $2 + $3 > m { m = $2 + $3 } END { print m }' "$f"):65536" >> "$f"
+    fi
+  done
+  # Ubuntu 24.04+ lets unprivileged users create user namespaces only
+  # through an AppArmor profile. Ubuntu ships one for /usr/bin/rootlesskit;
+  # elsewhere this adds one for rootlesskit alone, as Docker's docs
+  # describe, instead of lifting the limit for everything.
+  ROOTLESSKIT="$(command -v rootlesskit)"
+  if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] && command -v apparmor_parser >/dev/null \
+    && ! grep -qsF "$ROOTLESSKIT" /etc/apparmor.d/*; then
+    cat > /etc/apparmor.d/usr.bin.rootlesskit <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+"$ROOTLESSKIT" flags=(unconfined) {
+  userns,
+
+  include if exists <local/usr.bin.rootlesskit>
+}
+EOF
+    apparmor_parser -r /etc/apparmor.d/usr.bin.rootlesskit
+  fi
+  # Memory and CPU limits need the cgroup controllers delegated to hakobu's
+  # user manager.
+  mkdir -p "/etc/systemd/system/user@$HK_UID.service.d"
+  cat > "/etc/systemd/system/user@$HK_UID.service.d/delegate.conf" <<'EOF'
+[Service]
+Delegate=cpu cpuset io memory pids
+EOF
+  systemctl daemon-reload
+  # Lingering starts hakobu's user manager (and its Docker) at boot.
+  loginctl enable-linger hakobu
+  for _ in $(seq 1 30); do
+    [ -S "$HK_RUN/bus" ] && break
+    sleep 1
+  done
+  as_hakobu() {
+    (cd / && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DBUS_SESSION_BUS_ADDRESS="unix:path=$HK_RUN/bus" "$@")
+  }
+  if ! as_hakobu systemctl --user -q is-active docker; then
+    as_hakobu dockerd-rootless-setuptool.sh install
+  fi
+  as_hakobu systemctl --user -q enable docker
+  for _ in $(seq 1 60); do
+    as_hakobu env DOCKER_HOST="unix://$HK_RUN/docker.sock" docker info >/dev/null 2>&1 && break
+    sleep 1
+  done
+  # A system Docker installed just now would sit unused as a root-equivalent
+  # socket; one that was there before may serve something else, so it stays.
+  if [ -z "$HAD_DOCKER" ]; then
+    systemctl disable --now docker.service docker.socket >/dev/null 2>&1 || true
+    rm -f /var/run/docker.sock # left behind, nothing listens on it
+  fi
+  # The docker CLI keeps build state here, the one place in the home the
+  # service may write.
+  install -d -o hakobu -g hakobu -m 0700 /home/hakobu/.docker
+fi
+
 echo "==> installing hakobu to /opt/hakobu"
-mkdir -p "$DATA"
+mkdir -p "$DATA" /opt/hakobu/run
 chmod 700 "$DATA"
+if [ -z "$ROOTFUL" ]; then
+  # hakobu writes only its data and the panel socket's directory, which
+  # cloudflared mounts; the binary stays root's.
+  chown hakobu:hakobu "$DATA" /opt/hakobu/run
+fi
 # The running binary can't be overwritten ("text file busy").
 systemctl stop hakobu 2>/dev/null || true
 VERSION="${HAKOBU_VERSION:-}"
@@ -87,9 +185,15 @@ chmod +x /opt/hakobu/hakobu
 
 echo "==> connecting Cloudflare"
 # stdin is the script itself under curl | bash, so setup talks to the terminal.
-(cd /opt/hakobu && ./hakobu setup) < /dev/tty
+if [ -n "$ROOTFUL" ]; then
+  (cd /opt/hakobu && ./hakobu setup) < /dev/tty
+else
+  (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DOCKER_HOST="unix://$HK_RUN/docker.sock" ./hakobu setup) < /dev/tty
+fi
 
-cat > /etc/systemd/system/hakobu.service <<'EOF'
+if [ -n "$ROOTFUL" ]; then
+  echo "    this install runs as root under the system Docker; moving it to rootless Docker isn't automatic yet"
+  cat > "$UNIT" <<'EOF'
 [Unit]
 Description=hakobu
 After=docker.service network-online.target
@@ -104,6 +208,55 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+else
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=hakobu
+Wants=network-online.target
+After=network-online.target user@$HK_UID.service
+Requires=user@$HK_UID.service
+
+[Service]
+User=hakobu
+Group=hakobu
+WorkingDirectory=/opt/hakobu
+Environment=XDG_RUNTIME_DIR=$HK_RUN
+Environment=DOCKER_HOST=unix://$HK_RUN/docker.sock
+# Docker is a user service of hakobu's that starts alongside; the agent
+# starts the tunnel once, so it waits for Docker to answer.
+ExecStartPre=/bin/sh -c 'for i in \$\$(seq 1 120); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStart=/opt/hakobu/hakobu agent
+Restart=always
+RestartSec=5
+TimeoutStartSec=150
+
+# Sandboxing. The container dialer enters rootless Docker's namespaces with
+# nsenter, so RestrictNamespaces, PrivateUsers and SystemCallFilter stay off;
+# ProtectProc stays default so container ports can be read from /proc.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/hakobu/data /opt/hakobu/run /home/hakobu/.docker
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
 systemctl daemon-reload
 systemctl enable hakobu >/dev/null 2>&1
 systemctl restart hakobu
