@@ -146,6 +146,9 @@ SELECT * FROM databases ORDER BY name;
 -- name: ListDatabasesByProject :many
 SELECT * FROM databases WHERE project_id = ? ORDER BY name;
 
+-- name: SetDatabasePassword :exec
+UPDATE databases SET db_password = ? WHERE name = ?;
+
 -- name: DeleteDatabase :exec
 DELETE FROM databases WHERE name = ?;
 
@@ -160,6 +163,12 @@ SELECT * FROM storages WHERE name = ?;
 
 -- name: ListStoragesByProject :many
 SELECT * FROM storages WHERE project_id = ? ORDER BY name;
+
+-- name: SetStorageKeys :exec
+UPDATE storages SET access_key_id = ?, secret_access_key = ? WHERE name = ?;
+
+-- name: ListStorages :many
+SELECT * FROM storages ORDER BY name;
 
 -- name: DeleteStorage :exec
 DELETE FROM storages WHERE name = ?;
@@ -192,6 +201,9 @@ DELETE FROM backups WHERE database = ?;
 -- name: SaveGitHubApp :exec
 INSERT OR REPLACE INTO github_app (id, app_id, slug, private_key, webhook_secret, client_id, client_secret)
 VALUES (1, ?, ?, ?, ?, ?, ?);
+
+-- name: SetGitHubWebhookSecret :exec
+UPDATE github_app SET webhook_secret = ? WHERE id = 1;
 
 -- name: GetGitHubApp :one
 SELECT * FROM github_app WHERE id = 1;
@@ -262,6 +274,9 @@ ON CONFLICT(id) DO UPDATE SET access_token = excluded.access_token, refresh_toke
 
 -- name: SetBackupBucket :exec
 UPDATE cloudflare SET backup_bucket = ? WHERE id = 1;
+
+-- name: SetTunnelToken :exec
+UPDATE cloudflare SET tunnel_token = ? WHERE id = 1;
 
 -- name: SaveCloudflareTunnel :exec
 UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zone_id = ?, panel_record_id = ? WHERE id = 1;

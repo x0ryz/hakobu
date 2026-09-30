@@ -541,6 +541,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"PublicHost": config.PublicHost(), "Owner": owner,
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
+			"Rotation": ops.LastRotation(),
 		}
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
@@ -554,6 +555,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 
 	action("POST /settings/backups", func(r *http.Request) (string, error) {
 		return "", ops.SetupBackups(s)
+	})
+
+	action("POST /settings/rotate-secrets", func(r *http.Request) (string, error) {
+		return "", ops.StartRotation(s)
 	})
 }
 

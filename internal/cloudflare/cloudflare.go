@@ -217,6 +217,25 @@ func (c Client) CreateTunnel(accountID, name, service string) (id, token string,
 	return t.ID, token, err
 }
 
+// RotateTunnelSecret gives the tunnel a new secret and returns its new run
+// token, then disconnects every connector: one run with the old token (a
+// stolen copy, say) can't connect again, and cloudflared reconnects with
+// the new one once it's restarted.
+func (c Client) RotateTunnelSecret(accountID, tunnelID string) (token string, err error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	path := "/accounts/" + accountID + "/cfd_tunnel/" + tunnelID
+	if err := c.call("PATCH", path, map[string]string{"tunnel_secret": base64.StdEncoding.EncodeToString(secret)}, nil); err != nil {
+		return "", err
+	}
+	if err := c.call("GET", path+"/token", nil, &token); err != nil {
+		return "", err
+	}
+	return token, c.call("DELETE", path+"/connections", nil, nil)
+}
+
 // IngressRule sends requests for Hostname (any, if empty) to Service. The
 // last rule must have no hostname.
 type IngressRule struct {

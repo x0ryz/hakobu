@@ -431,13 +431,13 @@
       <div class="flex gap-2 items-center mono">
         <span class="w-2/5 truncate" title="{{.Key}}">{{.Key}}</span>
         <span class="flex-1 truncate text-faint">••••••••</span>
-        <span class="text-xs text-faint w-8">sealed</span>
+        <span class="text-xs text-faint w-12 text-right">sealed</span>
       </div>
       {{else}}
       <div class="flex gap-2 items-center mono" x-data="{show:false}">
         <span class="w-2/5 truncate" title="{{.Key}}">{{.Key}}</span>
         <span class="flex-1 truncate" :class="show ? '' : 'text-faint'" data-v="{{.Value}}" x-text="show ? $el.dataset.v : '••••••••'"></span>
-        <button type="button" @click="show=!show" class="link w-8" x-text="show ? 'hide' : 'show'"></button>
+        <button type="button" @click="show=!show" class="link w-12 text-right" x-text="show ? 'hide' : 'show'"></button>
       </div>
       {{end}}
       {{end}}
@@ -600,6 +600,25 @@
     <p class="text-sm text-dim">Creates a private R2 bucket in your Cloudflare account and backs up every database to it daily. Backups live off this server, so they survive losing it. R2's free plan includes 10 GB.</p>
     {{if not .CloudflareConnected}}<p class="text-xs text-faint">Needs Cloudflare connected first: <span class="mono">cd /opt/hakobu && sudo ./hakobu setup</span>.</p>{{end}}
     {{end}}
+  </div>
+
+  <div id="security" class="card" {{if .Rotation.Running}}hx-get="/settings" hx-trigger="every 2s" hx-select="#security" hx-swap="outerHTML"{{end}}>
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="h2">Security</h2>
+      <button hx-post="/settings/rotate-secrets" hx-confirm="Replace every secret hakobu can replace? Apps restart with the new values, the panel and apps are unreachable for a few seconds while the tunnel reconnects, and everyone (you too) has to sign in again." class="btn-danger" {{if .Rotation.Running}}disabled{{end}}>Replace all secrets</button>
+    </div>
+    <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret, Cloudflare tokens and tunnel token, restarts the apps with them, signs everyone out and rotates the master key. It then lists what only you can replace.</p>
+    <p class="text-xs text-faint">Secrets are encrypted in the database with <span class="mono">data/master.key</span>: back it up together with <span class="mono">data/hakobu.db</span>, or the secrets in a copy can't be read.</p>
+    {{with .Rotation}}{{if .Started}}
+    <div class="space-y-2">
+      <p class="text-sm {{if .Running}}text-dim{{else if .Failures}}text-bad{{else}}text-good{{end}}">{{if .Running}}Replacing secrets (started {{.Started}})…{{else if .Failures}}Finished with {{.Failures}} failure(s), started {{.Started}}.{{else}}All replaced, started {{.Started}}.{{end}}</p>
+      <pre class="console max-h-64 overflow-y-auto">{{.Log}}</pre>
+      {{if .Manual}}
+      <p class="text-sm font-medium">Left for you to replace:</p>
+      <ul class="text-sm text-dim list-disc pl-5 space-y-1">{{range .Manual}}<li>{{.}}</li>{{end}}</ul>
+      {{end}}
+    </div>
+    {{end}}{{end}}
   </div>
 
   <div class="card">

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -450,5 +451,108 @@ func TestDockerDataRollback(t *testing.T) {
 	}
 	if reason := DataRollbackBlocker(s, reload()); !strings.Contains(reason, "other apps") {
 		t.Errorf("shared database: %q", reason)
+	}
+}
+
+// TestDockerRotateSecrets runs its own Postgres and, where there's no
+// hakobu-rustfs container, RustFS.
+func TestDockerRotateSecrets(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	if st, _ := deploy.ContainerStatus(ctx(), rustfsContainer); st != "not found" {
+		t.Skip(rustfsContainer + " exists; not touching it")
+	}
+	suffix, _ := RandomHex(3)
+	oldPG := PostgresContainer
+	PostgresContainer = "zt-pg-" + suffix
+	t.Cleanup(func() {
+		for _, c := range []string{PostgresContainer, rustfsContainer} {
+			_ = deploy.RemoveContainer(ctx(), c)
+			_ = deploy.RemoveVolume(ctx(), c+"_data")
+		}
+		PostgresContainer = oldPG
+	})
+	dir := t.TempDir()
+	t.Chdir(dir)
+	s, err := store.Open(filepath.Join(dir, "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := newDockerTestApp(t, s)
+	t.Cleanup(func() {
+		if err := DeleteApp(s, app.Name); err != nil {
+			t.Error(err)
+		}
+	})
+	must(CreateDatabase(s, app.ProjectName, "zt"+suffix))
+	must(LinkDatabase(s, app.Name, "zt"+suffix))
+	must(CreateStorage(s, app.ProjectName, store.Storage{Name: "zt" + suffix, Provider: "rustfs"}))
+	must(LinkStorage(s, app.Name, "zt"+suffix))
+	must(SetAppEnv(s, app.Name, "API_KEY=abc"))
+	must(SealVar(s, "app", app.Name, "SEALED", "shh"))
+	must(s.SetAppSentryKey(ctx(), store.SetAppSentryKeyParams{Name: app.Name, SentryKey: "oldsentrykey"}))
+	must(s.NewSession(ctx(), "tok", "me", time.Hour))
+
+	a, _ := s.GetApp(ctx(), app.Name)
+	buildTestImage(t, nextImageTag(a), "v1")
+	var out strings.Builder
+	must(rollOut(s, a, nextImageTag(a), &out))
+	must(promote(a, &out))
+
+	dbBefore, _ := s.GetDatabase(ctx(), "zt"+suffix)
+	stBefore, _ := s.GetStorage(ctx(), "zt"+suffix)
+	keyBefore, _ := os.ReadFile("master.key")
+
+	var log strings.Builder
+	manual, failures := rotateSecrets(s, &log)
+	if failures != 0 {
+		t.Fatalf("%d failures:\n%s", failures, log.String())
+	}
+
+	dbAfter, _ := s.GetDatabase(ctx(), "zt"+suffix)
+	stAfter, _ := s.GetStorage(ctx(), "zt"+suffix)
+	a, _ = s.GetApp(ctx(), app.Name)
+	if dbAfter.Password == dbBefore.Password || stAfter.AccessKeyID == stBefore.AccessKeyID || a.SentryKey == "oldsentrykey" {
+		t.Error("a secret wasn't replaced")
+	}
+	// The new database password works, the old one doesn't, connecting
+	// like an app does (inside its container Postgres trusts localhost).
+	login := func(pw string) error {
+		return exec.Command("docker", "run", "--rm", "--quiet", "--network", deploy.NetworkName, "-e", "PGPASSWORD="+pw, "postgres:18",
+			"psql", "-h", PostgresContainer, "-U", dbAfter.User, "-d", dbAfter.Name, "-c", "SELECT 1").Run()
+	}
+	if login(string(dbAfter.Password)) != nil || login(string(dbBefore.Password)) == nil {
+		t.Error("database password not rotated")
+	}
+	// The storage's new keys work, the old ones are revoked.
+	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer)
+	reach := func(st store.Storage) error {
+		st.Endpoint = "http://" + ip + ":" + rustfsPort
+		return s3.NewClient(st).CreateBucket()
+	}
+	if reach(stAfter) != nil || reach(stBefore) == nil {
+		t.Error("storage keys not rotated")
+	}
+	// The app was restarted with the new values and still serves.
+	expectServing(t, a, "v1")
+	env, _ := deploy.ContainerEnv(ctx(), a.ContainerName())
+	if !strings.Contains(env["DATABASE_URL"], string(dbAfter.Password)) || env["S3_ACCESS_KEY_ID"] != stAfter.AccessKeyID || env["SEALED"] != "shh" {
+		t.Errorf("the app runs with old values: DATABASE_URL=%q S3_ACCESS_KEY_ID=%q", env["DATABASE_URL"], env["S3_ACCESS_KEY_ID"])
+	}
+	if _, err := s.SessionLogin(ctx(), "tok"); err == nil {
+		t.Error("sessions survived")
+	}
+	if keyAfter, _ := os.ReadFile("master.key"); string(keyAfter) == string(keyBefore) {
+		t.Error("master key not rotated")
+	}
+	if !slices.ContainsFunc(manual, func(m string) bool { return strings.Contains(m, "API_KEY") && strings.Contains(m, "SEALED") }) {
+		t.Errorf("the user's variables aren't listed to replace: %v", manual)
 	}
 }

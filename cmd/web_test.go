@@ -34,7 +34,8 @@ func TestTemplatesRender(t *testing.T) {
 		"errors":  []store.TelemetryEvent{{Kind: "error", Message: "boom"}},
 		"database": map[string]any{"DB": db, "Project": project, "Ready": true, "Env": splitEnv([]string{"A=1"}), "BackupBucket": "hakobu-backups-1", "Backups": []store.Backup{{ObjectKey: "k", SizeBytes: 2048}, {ID: 2, VerifiedAt: "t", Tables: 3}, {ID: 3, VerifiedAt: "t", VerifyError: "boom"}}, "UsedBy": []string{"web"},
 			"Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
-		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1"},
+		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1",
+			"Rotation": ops.Rotation{Started: "2026-09-30 10:00", Log: "done    x\n", Manual: []string{"GitHub App ..."}, Failures: 1}},
 	}
 	for name, data := range cases {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {

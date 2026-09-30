@@ -1178,6 +1178,43 @@ func (q *Queries) ListSealedVars(ctx context.Context, arg ListSealedVarsParams) 
 	return items, nil
 }
 
+const listStorages = `-- name: ListStorages :many
+SELECT name, project_id, provider, account_id, endpoint, access_key_id, secret_access_key, bucket, region FROM storages ORDER BY name
+`
+
+func (q *Queries) ListStorages(ctx context.Context) ([]Storage, error) {
+	rows, err := q.db.QueryContext(ctx, listStorages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Storage
+	for rows.Next() {
+		var i Storage
+		if err := rows.Scan(
+			&i.Name,
+			&i.ProjectID,
+			&i.Provider,
+			&i.AccountID,
+			&i.Endpoint,
+			&i.AccessKeyID,
+			&i.SecretAccessKey,
+			&i.Bucket,
+			&i.Region,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStoragesByProject = `-- name: ListStoragesByProject :many
 SELECT name, project_id, provider, account_id, endpoint, access_key_id, secret_access_key, bucket, region FROM storages WHERE project_id = ? ORDER BY name
 `
@@ -1572,6 +1609,29 @@ func (q *Queries) SetBackupVerified(ctx context.Context, arg SetBackupVerifiedPa
 	return err
 }
 
+const setDatabasePassword = `-- name: SetDatabasePassword :exec
+UPDATE databases SET db_password = ? WHERE name = ?
+`
+
+type SetDatabasePasswordParams struct {
+	Password secret.String
+	Name     string
+}
+
+func (q *Queries) SetDatabasePassword(ctx context.Context, arg SetDatabasePasswordParams) error {
+	_, err := q.db.ExecContext(ctx, setDatabasePassword, arg.Password, arg.Name)
+	return err
+}
+
+const setGitHubWebhookSecret = `-- name: SetGitHubWebhookSecret :exec
+UPDATE github_app SET webhook_secret = ? WHERE id = 1
+`
+
+func (q *Queries) SetGitHubWebhookSecret(ctx context.Context, webhookSecret secret.String) error {
+	_, err := q.db.ExecContext(ctx, setGitHubWebhookSecret, webhookSecret)
+	return err
+}
+
 const setOwner = `-- name: SetOwner :exec
 INSERT INTO owner (id, github_login) VALUES (1, ?)
 `
@@ -1616,6 +1676,30 @@ func (q *Queries) SetSealedVar(ctx context.Context, arg SetSealedVarParams) erro
 		arg.Key,
 		arg.Value,
 	)
+	return err
+}
+
+const setStorageKeys = `-- name: SetStorageKeys :exec
+UPDATE storages SET access_key_id = ?, secret_access_key = ? WHERE name = ?
+`
+
+type SetStorageKeysParams struct {
+	AccessKeyID     string
+	SecretAccessKey secret.String
+	Name            string
+}
+
+func (q *Queries) SetStorageKeys(ctx context.Context, arg SetStorageKeysParams) error {
+	_, err := q.db.ExecContext(ctx, setStorageKeys, arg.AccessKeyID, arg.SecretAccessKey, arg.Name)
+	return err
+}
+
+const setTunnelToken = `-- name: SetTunnelToken :exec
+UPDATE cloudflare SET tunnel_token = ? WHERE id = 1
+`
+
+func (q *Queries) SetTunnelToken(ctx context.Context, tunnelToken secret.String) error {
+	_, err := q.db.ExecContext(ctx, setTunnelToken, tunnelToken)
 	return err
 }
 

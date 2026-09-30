@@ -3,7 +3,13 @@ package cloudflare
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +40,41 @@ func TestZoneFor(t *testing.T) {
 		if z.ID != want || ok != (want != "") {
 			t.Errorf("ZoneFor(%q) = %q, %v; want %q", host, z.ID, ok, want)
 		}
+	}
+}
+
+func TestRotateTunnelSecret(t *testing.T) {
+	var calls []string
+	var secret string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == "PATCH" {
+			var body struct {
+				TunnelSecret string `json:"tunnel_secret"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			secret = body.TunnelSecret
+		}
+		result := `{}`
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			result = `"new-token"`
+		}
+		fmt.Fprintf(w, `{"success":true,"errors":[],"result":%s}`, result)
+	}))
+	defer srv.Close()
+	old := APIURL
+	APIURL = srv.URL
+	defer func() { APIURL = old }()
+
+	token, err := Client{Token: "t"}.RotateTunnelSecret("acc", "tun")
+	if err != nil || token != "new-token" {
+		t.Fatalf("token %q, %v", token, err)
+	}
+	if raw, err := base64.StdEncoding.DecodeString(secret); err != nil || len(raw) < 32 {
+		t.Errorf("tunnel secret %q isn't 32+ bytes of base64", secret)
+	}
+	want := []string{"PATCH /accounts/acc/cfd_tunnel/tun", "GET /accounts/acc/cfd_tunnel/tun/token", "DELETE /accounts/acc/cfd_tunnel/tun/connections"}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls %v, want %v", calls, want)
 	}
 }

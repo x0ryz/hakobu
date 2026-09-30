@@ -115,6 +115,12 @@ var refreshMu sync.Mutex
 // cfClient returns an API client, refreshing the access token when it's
 // about to expire.
 func cfClient(s *store.Store) (cloudflare.Client, store.Cloudflare, error) {
+	return cfClientRefresh(s, false)
+}
+
+// cfClientRefresh with force gets new tokens even if the current ones are
+// fresh; the old refresh token stops working.
+func cfClientRefresh(s *store.Store, force bool) (cloudflare.Client, store.Cloudflare, error) {
 	refreshMu.Lock()
 	defer refreshMu.Unlock()
 	cf, err := s.GetCloudflare(ctx())
@@ -122,7 +128,7 @@ func cfClient(s *store.Store) (cloudflare.Client, store.Cloudflare, error) {
 		return cloudflare.Client{}, cf, fmt.Errorf("Cloudflare is not connected")
 	}
 	exp, _ := time.Parse(time.RFC3339, cf.ExpiresAt)
-	if time.Until(exp) < time.Minute {
+	if force || time.Until(exp) < time.Minute {
 		t, err := cloudflare.Refresh(config.CloudflareClientID, string(cf.RefreshToken))
 		if err != nil {
 			return cloudflare.Client{}, cf, fmt.Errorf("Cloudflare access expired; reconnect with `cd /opt/hakobu && sudo ./hakobu setup --reconnect`: %w", err)

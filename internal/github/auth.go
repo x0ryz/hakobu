@@ -4,6 +4,7 @@
 package github
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -38,6 +39,9 @@ func call(method, rawURL, bearer string, body io.Reader, wantStatus int, out any
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -84,6 +88,17 @@ func RepoToken(appID int64, privateKeyPEM, repo string) (string, error) {
 		return "", fmt.Errorf("repo %s is not accessible — install the GitHub App on it: %w", repo, err)
 	}
 	return InstallationToken(appID, privateKeyPEM, inst.ID)
+}
+
+// SetWebhookSecret changes the secret GitHub signs the app's webhook
+// deliveries with.
+func SetWebhookSecret(appID int64, privateKeyPEM, secret string) error {
+	j, err := appJWT(appID, privateKeyPEM)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]string{"secret": secret})
+	return call("PATCH", "https://api.github.com/app/hook/config", j, bytes.NewReader(body), http.StatusOK, nil)
 }
 
 func CloneURL(repo string) string {
