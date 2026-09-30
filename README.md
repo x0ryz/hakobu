@@ -24,7 +24,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens are encrypted in the SQLite
   database with a key in `data/master.key` (keep it with any copy of the database; without it they can't be read).
 - **Keeps the disk in check**: each app keeps only its live image and one for rollback; unused build cache is dropped daily.
-- Single Go binary + SQLite. Needs only Docker.
+- Single Go binary + SQLite. Needs only Docker, which the installer sets up rootless.
 
 ## Install
 
@@ -49,7 +49,13 @@ Every app then gets its own address in any domain of the account (`app.example.c
 `myapp.dev`, …); hakobu creates and removes the DNS records itself.
 
 Lost the setup link: `journalctl -u hakobu | grep setup`. Sign in to Cloudflare again:
-`cd /opt/hakobu && sudo ./hakobu setup --reconnect`.
+`cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
+
+Hakobu runs as the unprivileged `hakobu` user with its own
+[rootless Docker](https://docs.docker.com/engine/security/rootless/), so neither a break-in
+into hakobu nor a container escape gets root on the server. Servers installed before that
+keep running as root under the system Docker (their databases live there) and the installer
+only updates them; to move one to rootless Docker, install hakobu on a clean server.
 
 ### OAuth relay
 

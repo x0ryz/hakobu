@@ -192,7 +192,7 @@ else
 fi
 
 if [ -n "$ROOTFUL" ]; then
-  echo "    this install runs as root under the system Docker; moving it to rootless Docker isn't automatic yet"
+  echo "    this install runs as root under the system Docker; to move to rootless Docker, install hakobu on a clean server"
   cat > "$UNIT" <<'EOF'
 [Unit]
 Description=hakobu
