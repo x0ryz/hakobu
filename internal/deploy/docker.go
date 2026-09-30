@@ -4,6 +4,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -561,8 +562,8 @@ func StartContainer(ctx context.Context, containerName string) error {
 
 // ListeningPorts returns the TCP ports the container listens on, split into
 // ports reachable from other containers and ones bound to loopback only.
-// It reads the container's /proc/<pid>/net/tcp{,6} from the host (hakobu runs
-// as root), falling back to `cat` inside the container.
+// It reads the container's /proc/<pid>/net/tcp{,6} from the host, falling
+// back to `cat` inside the container.
 func ListeningPorts(ctx context.Context, containerName string) (reachable, loopback []int, err error) {
 	info, err := inspect(ctx, containerName)
 	if err != nil || info == nil || info.State.Pid == 0 {
@@ -581,31 +582,63 @@ func ListeningPorts(ctx context.Context, containerName string) (reachable, loopb
 		}
 		tables += string(b)
 	}
-	seen := map[int]bool{}
+	reachable, loopback = parseListening(tables)
+	return reachable, loopback, nil
+}
+
+// dockerDNS is where Docker's embedded resolver listens in every container
+// on a user-defined network, on a random port; it isn't the app's.
+var dockerDNS = net.IPv4(127, 0, 0, 11)
+
+// parseListening reads /proc/net/tcp{,6} tables. A port counts as reachable
+// if any listener on it is bound beyond loopback (all of 127.0.0.0/8 and
+// ::1 are loopback).
+func parseListening(tables string) (reachable, loopback []int) {
+	onLoopback, beyond := map[int]bool{}, map[int]bool{}
 	for _, line := range strings.Split(tables, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 || fields[3] != "0A" { // 0A = LISTEN
 			continue
 		}
-		addr, portHex, ok := strings.Cut(fields[1], ":")
+		addrHex, portHex, ok := strings.Cut(fields[1], ":")
 		if !ok {
 			continue
 		}
-		port64, err := strconv.ParseInt(portHex, 16, 32)
-		if err != nil || seen[int(port64)] {
+		port, err := strconv.ParseInt(portHex, 16, 32)
+		ip := procAddr(addrHex)
+		if err != nil || ip == nil || ip.Equal(dockerDNS) {
 			continue
 		}
-		port := int(port64)
-		seen[port] = true
-		// 127.0.0.1 in tcp, ::1 in tcp6 (little-endian hex).
-		if addr == "0100007F" || addr == "00000000000000000000000001000000" || addr == "0000000000000000FFFF00000100007F" {
-			loopback = append(loopback, port)
+		if ip.IsLoopback() {
+			onLoopback[int(port)] = true
 		} else {
-			reachable = append(reachable, port)
+			beyond[int(port)] = true
+		}
+	}
+	for p := range beyond {
+		reachable = append(reachable, p)
+	}
+	for p := range onLoopback {
+		if !beyond[p] {
+			loopback = append(loopback, p)
 		}
 	}
 	sort.Ints(reachable)
-	return reachable, loopback, nil
+	sort.Ints(loopback)
+	return reachable, loopback
+}
+
+// procAddr decodes an address from /proc/net/tcp{,6}: hex of 32-bit words,
+// each in the host's (little-endian) byte order.
+func procAddr(h string) net.IP {
+	b, err := hex.DecodeString(h)
+	if err != nil || (len(b) != net.IPv4len && len(b) != net.IPv6len) {
+		return nil
+	}
+	for i := 0; i < len(b); i += 4 {
+		b[i], b[i+1], b[i+2], b[i+3] = b[i+3], b[i+2], b[i+1], b[i]
+	}
+	return net.IP(b)
 }
 
 // ExposedPort returns the first port an image EXPOSEs, 0 if none.
