@@ -39,7 +39,11 @@ func WatchOOM(s *store.Store) {
 		err := deploy.WatchOOM(context.Background(), func(container, appName string, sure bool) {
 			app, err := s.GetApp(ctx(), appName)
 			if err != nil {
-				fmt.Println(container, "was killed: out of memory")
+				if sure {
+					fmt.Println(container, "was killed: out of memory")
+				} else {
+					fmt.Println(container, "was killed (exit 137), most likely out of memory")
+				}
 				return
 			}
 			reason := "was killed: " + oomText(app)
