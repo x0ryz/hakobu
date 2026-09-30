@@ -234,11 +234,16 @@ func StartRollback(s *store.Store, appName string, withData bool) error {
 			if current, err = rollBackData(s, app, out); err != nil {
 				return err
 			}
-			defer os.Remove(current)
+			// Moved by keepSnapshot on success; kept if undoing fails.
+			defer func() {
+				if current != "" {
+					os.Remove(current)
+				}
+			}()
 		}
 		if err := rollOut(s, app, prev, out); err != nil {
-			if withData {
-				undoDataRollback(s, app, current, out)
+			if withData && !undoDataRollback(s, app, current, out) {
+				current = ""
 			}
 			return err
 		}
@@ -272,38 +277,53 @@ func rollBackData(s *store.Store, app store.App, out io.Writer) (current string,
 		return "", fmt.Errorf("couldn't save the current data, nothing changed: %w", err)
 	}
 	fmt.Fprintln(out, "stopping", app.Name, "and restoring", d.Name, "from", app.SnapshotAt)
-	stopApp(app)
-	if err := replaceDatabase(d, snapshotPath(app.Name)); err != nil {
+	err = stopApp(app)
+	if err == nil {
+		err = replaceDatabase(d, snapshotPath(app.Name))
+	}
+	if err != nil {
 		os.Remove(current)
 		restartContainer(app, app.ContainerName(), out)
 		restartWorker(s, app, out)
-		return "", fmt.Errorf("restoring the snapshot failed, the data is unchanged: %w", err)
+		return "", fmt.Errorf("the data is unchanged: %w", err)
 	}
 	return current, nil
 }
 
 // undoDataRollback puts the saved current data back when the previous
-// version didn't start, then starts the current version again.
-func undoDataRollback(s *store.Store, app store.App, current string, out io.Writer) {
-	stopApp(app) // a recreate deploy may have started it again already
-	d, err := s.GetDatabase(ctx(), app.LinkedDB)
+// version didn't start, then starts the current version again. If it
+// can't, the dump is kept on disk and it returns false.
+func undoDataRollback(s *store.Store, app store.App, current string, out io.Writer) bool {
+	err := stopApp(app) // a recreate deploy may have started it again already
 	if err == nil {
-		err = replaceDatabase(d, current)
+		var d store.Database
+		if d, err = s.GetDatabase(ctx(), app.LinkedDB); err == nil {
+			err = replaceDatabase(d, current)
+		}
 	}
 	if err != nil {
 		keep := filepath.Join(snapshotDir, app.Name+"-before-rollback.sql.gz")
-		os.Rename(current, keep)
+		if rerr := os.Rename(current, keep); rerr != nil {
+			keep = current
+		}
 		fmt.Fprintf(out, "ERROR: couldn't put the current data back (%v); it's saved in %s\n", err, keep)
-		return
+		return false
 	}
 	fmt.Fprintln(out, "put the current data back")
 	restartContainer(app, app.ContainerName(), out)
 	restartWorker(s, app, out)
+	return true
 }
 
-func stopApp(app store.App) {
-	deploy.StopContainer(ctx(), app.ContainerName())
-	deploy.StopContainer(ctx(), app.Name+"-worker")
+// stopApp stops the app and its worker so nothing writes to the database.
+func stopApp(app store.App) error {
+	if err := deploy.StopContainer(ctx(), app.ContainerName()); err != nil {
+		return fmt.Errorf("couldn't stop %s: %w", app.Name, err)
+	}
+	if err := deploy.StopContainer(ctx(), app.Name+"-worker"); err != nil {
+		return fmt.Errorf("couldn't stop the worker of %s: %w", app.Name, err)
+	}
+	return nil
 }
 
 func restartWorker(s *store.Store, app store.App, out io.Writer) {
@@ -417,7 +437,9 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		func() error { return deploy.ConnectEdge(ctx(), candidate, EdgeAlias(app.Name)) },
 	} {
 		if err := step(); err != nil {
-			deploy.RemoveContainer(ctx(), candidate)
+			if rerr := deploy.RemoveContainer(ctx(), candidate); rerr != nil {
+				fmt.Fprintln(out, "warning:", rerr)
+			}
 			restoreOld()
 			return err
 		}
@@ -440,7 +462,9 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	if err := deploy.DisconnectEdge(ctx(), old); err != nil {
 		fmt.Fprintln(out, "warning:", err)
 	}
-	deploy.StopContainer(ctx(), old)
+	if err := deploy.StopContainer(ctx(), old); err != nil {
+		fmt.Fprintln(out, "warning:", err) // removing it below kills it anyway
+	}
 	if err := deploy.RemoveContainer(ctx(), old); err != nil {
 		fmt.Fprintln(out, "warning: failed to remove previous container:", err)
 	}

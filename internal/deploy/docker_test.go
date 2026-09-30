@@ -16,8 +16,8 @@ func TestDockerWatchOOM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	got := make(chan [2]string, 1)
-	go WatchOOM(ctx, func(container, app string) { got <- [2]string{container, app} })
-	time.Sleep(time.Second) // let the event stream connect
+	go func() { _ = WatchOOM(ctx, func(container, app string) { got <- [2]string{container, app} }) }() // ends with ctx
+	time.Sleep(time.Second)                                                                             // let the event stream connect
 
 	out, err := exec.Command("docker", "run", "--rm", "--name", "zt-oom", "-m", "32m", "--memory-swap", "32m",
 		"--label", AppLabel+"=zt-app", "busybox:1.36", "dd", "if=/dev/zero", "of=/dev/null", "bs=256M", "count=1").CombinedOutput()

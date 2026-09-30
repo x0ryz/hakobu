@@ -330,7 +330,11 @@ func verify(s *store.Store, b store.Backup) (tables int, err error) {
 			return 0, err
 		}
 	}
-	defer deploy.PostgresExec(ctx(), PostgresContainer, drop)
+	defer func() {
+		if err := deploy.PostgresExec(ctx(), PostgresContainer, drop); err != nil {
+			fmt.Println("failed to drop", scratch+":", err)
+		}
+	}()
 	if err := backup.RestoreDatabase(ctx(), PostgresContainer, d.User, scratch, body); err != nil {
 		return 0, err
 	}

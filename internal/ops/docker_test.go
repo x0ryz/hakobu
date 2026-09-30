@@ -266,8 +266,8 @@ func TestDockerRustFSStorages(t *testing.T) {
 		t.Skip(rustfsContainer + " exists; not touching it")
 	}
 	t.Cleanup(func() {
-		deploy.RemoveContainer(ctx(), rustfsContainer)
-		deploy.RemoveVolume(ctx(), rustfsContainer+"_data")
+		_ = deploy.RemoveContainer(ctx(), rustfsContainer)
+		_ = deploy.RemoveVolume(ctx(), rustfsContainer+"_data")
 	})
 	s, err := store.Open(filepath.Join(t.TempDir(), "hakobu.db"))
 	if err != nil {
@@ -319,21 +319,23 @@ func TestDockerDataRollback(t *testing.T) {
 	old := PostgresContainer
 	PostgresContainer = "zt-pg-" + suffix
 	t.Cleanup(func() {
-		deploy.RemoveContainer(ctx(), PostgresContainer)
-		deploy.RemoveVolume(ctx(), PostgresContainer+"_data")
+		_ = deploy.RemoveContainer(ctx(), PostgresContainer)
+		_ = deploy.RemoveVolume(ctx(), PostgresContainer+"_data")
 		PostgresContainer = old
 	})
 	dir := t.TempDir()
-	wd, _ := os.Getwd()
-	os.Chdir(dir) // snapshots go to data/snapshots
-	t.Cleanup(func() { os.Chdir(wd) })
+	t.Chdir(dir) // snapshots go to data/snapshots
 
 	s, err := store.Open(filepath.Join(dir, "hakobu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	app := newDockerTestApp(t, s)
-	t.Cleanup(func() { DeleteApp(s, app.Name) })
+	t.Cleanup(func() {
+		if err := DeleteApp(s, app.Name); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := CreateDatabase(s, app.ProjectName, "zt"+suffix); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +418,9 @@ func TestDockerDataRollback(t *testing.T) {
 	deployVersion("v3")
 	sql(`INSERT INTO notes2 VALUES ('v3 data')`)
 	a := reload()
-	s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/missing"}) // 404 for every version
+	if err := s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/missing"}); err != nil { // 404 for every version
+		t.Fatal(err)
+	}
 	if err := StartRollback(s, a.Name, true); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +428,9 @@ func TestDockerDataRollback(t *testing.T) {
 	if logs, _ := s.ListDeployLogs(ctx(), store.ListDeployLogsParams{AppName: a.Name, Limit: 1}); logs[0].Status != "failed" || !strings.Contains(logs[0].Output, "put the current data back") {
 		t.Errorf("failed rollback:\n%s", logs[0].Output)
 	}
-	s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/"})
+	if err := s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/"}); err != nil {
+		t.Fatal(err)
+	}
 	expectServing(t, reload(), "v3")
 	if got := sql(`SELECT count(*) FROM notes2`); got != "2" {
 		t.Errorf("rows after a failed data rollback: %s, want 2", got)
@@ -434,7 +440,11 @@ func TestDockerDataRollback(t *testing.T) {
 	if err := s.CreateApp(ctx(), store.CreateAppParams{ProjectID: app.ProjectID, Name: app.Name + "-b", BuildStrategy: "dockerfile"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { DeleteApp(s, app.Name+"-b") })
+	t.Cleanup(func() {
+		if err := DeleteApp(s, app.Name+"-b"); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := LinkDatabase(s, app.Name+"-b", d.Name); err != nil {
 		t.Fatal(err)
 	}

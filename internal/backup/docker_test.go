@@ -20,8 +20,8 @@ func TestDockerBackup(t *testing.T) {
 	}
 	ctx := context.Background()
 	pg := "zt-backup-pg"
-	exec.Command("docker", "rm", "-f", pg).Run()
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", pg).Run() })
+	_ = exec.Command("docker", "rm", "-f", pg).Run() // may not exist
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", pg).Run() })
 	docker(t, "run", "-d", "--name", pg, "-e", "POSTGRES_PASSWORD=x", "postgres:18")
 	waitFor(t, func() bool {
 		return exec.Command("docker", "exec", pg, "pg_isready", "-h", "127.0.0.1", "-U", "postgres").Run() == nil
@@ -41,7 +41,9 @@ func TestDockerBackup(t *testing.T) {
 	if err := DumpDatabase(ctx, pg, "app", "main", f); err != nil {
 		t.Fatal(err)
 	}
-	f.Seek(0, io.SeekStart)
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
 	if err := RestoreDatabase(ctx, pg, "app", "copy", f); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,9 @@ func gzipped(s string) io.Reader {
 	var b bytes.Buffer
 	cmd := exec.Command("gzip")
 	cmd.Stdin, cmd.Stdout = strings.NewReader(s), &b
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
 	return &b
 }
 

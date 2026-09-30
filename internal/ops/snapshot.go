@@ -109,7 +109,9 @@ func replaceDatabase(d store.Database, dump string) error {
 		}
 	}
 	if err := backup.RestoreDatabase(ctx(), PostgresContainer, d.User, scratch, f); err != nil {
-		deploy.PostgresExec(ctx(), PostgresContainer, drop)
+		if derr := deploy.PostgresExec(ctx(), PostgresContainer, drop); derr != nil {
+			fmt.Println("failed to drop", scratch+":", derr)
+		}
 		return err
 	}
 	for _, sql := range []string{

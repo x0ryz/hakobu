@@ -150,7 +150,9 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 						h(w, r)
 						return
 					}
-					s.EndSession(r.Context(), c.Value)
+					if err := s.EndSession(r.Context(), c.Value); err != nil {
+						fmt.Println("failed to end a session:", err)
+					}
 				}
 			}
 			if r.Header.Get("HX-Request") == "true" {
@@ -682,8 +684,13 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		// Signing out must end the session on the server too: a copied
+		// cookie would otherwise keep working.
 		if c, err := r.Cookie(sessionCookie); err == nil {
-			s.EndSession(r.Context(), c.Value)
+			if err := s.EndSession(r.Context(), c.Value); err != nil {
+				http.Error(w, "couldn't sign out: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		setCookie(w, sessionCookie, "", -1)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)

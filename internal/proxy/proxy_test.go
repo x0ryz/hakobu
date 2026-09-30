@@ -12,7 +12,7 @@ import (
 
 func TestRemoveDropsKeptAliveConnections(t *testing.T) {
 	backend := func(body string) *url.URL {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }))
 		t.Cleanup(srv.Close)
 		u, _ := url.Parse(srv.URL)
 		return u
@@ -33,7 +33,9 @@ func TestRemoveDropsKeptAliveConnections(t *testing.T) {
 	if _, err := Ensure("old", port); err != nil {
 		t.Fatal(err)
 	}
-	SetTarget("old", backend("old app"))
+	if err := SetTarget("old", backend("old app")); err != nil {
+		t.Fatal(err)
+	}
 	if got := get(); got != "old app" {
 		t.Fatalf("got %q", got)
 	}
@@ -44,7 +46,9 @@ func TestRemoveDropsKeptAliveConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer Remove("new")
-	SetTarget("new", backend("new app"))
+	if err := SetTarget("new", backend("new app")); err != nil {
+		t.Fatal(err)
+	}
 	if got := get(); got != "new app" {
 		t.Errorf("after the port changed hands: %q", got)
 	}

@@ -130,7 +130,9 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 		t.Fatal(err)
 	}
 	var raw string
-	s.db.QueryRow(`SELECT shared_env FROM projects`).Scan(&raw)
+	if err := s.db.QueryRow(`SELECT shared_env FROM projects`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
 	if !secret.IsEncrypted(raw) || strings.Contains(raw, "hunter2") {
 		t.Errorf("stored %q, want ciphertext", raw)
 	}
@@ -142,7 +144,9 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 		t.Errorf("read %q, %v", p.SharedEnv, err)
 	}
 	// A secret column holding something unencrypted is an error, not data.
-	s.db.Exec(`UPDATE projects SET shared_env = 'X=1'`)
+	if _, err := s.db.Exec(`UPDATE projects SET shared_env = 'X=1'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.GetProject(ctx, "demo"); err == nil {
 		t.Error("plaintext in a secret column was accepted")
 	}
@@ -154,7 +158,9 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 		t.Errorf("session = %q, %v", login, err)
 	}
 	var stored string
-	s.db.QueryRow(`SELECT id FROM sessions`).Scan(&stored)
+	if err := s.db.QueryRow(`SELECT id FROM sessions`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
 	if stored == "tok" {
 		t.Error("session token stored as is")
 	}

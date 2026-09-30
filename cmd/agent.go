@@ -97,7 +97,11 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		WriteTimeout: config.WriteTimeout,
 		IdleTimeout:  config.IdleTimeout,
 	}
-	go srv.Serve(sock)
+	go func() {
+		if err := srv.Serve(sock); err != nil {
+			fmt.Println("panel socket:", err)
+		}
+	}()
 	return srv.Serve(ln)
 }
 

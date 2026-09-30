@@ -53,7 +53,11 @@ func Ensure(name string, port int64) (isNew bool, err error) {
 	p := &appProxy{}
 	srv := &http.Server{Handler: p}
 	registry[name] = &entry{proxy: p, server: srv}
-	go srv.Serve(ln)
+	go func() {
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
+			fmt.Println("proxy for", name+":", err)
+		}
+	}()
 	return true, nil
 }
 

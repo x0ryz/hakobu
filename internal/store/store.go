@@ -94,7 +94,7 @@ func (s *Store) SessionLogin(ctx context.Context, token string) (string, error) 
 		return "", err
 	}
 	if sess.ExpiresAt < timestamp(time.Now()) {
-		s.DeleteSession(ctx, sess.ID)
+		_ = s.DeleteSession(ctx, sess.ID) // PruneOldData removes it otherwise
 		return "", fmt.Errorf("session expired")
 	}
 	return sess.GitHubLogin, nil

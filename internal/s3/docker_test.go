@@ -17,8 +17,8 @@ func TestDockerRustFSUsers(t *testing.T) {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
 	}
 	fs := "zt-s3-rustfs"
-	exec.Command("docker", "rm", "-f", fs).Run()
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", fs).Run() })
+	_ = exec.Command("docker", "rm", "-f", fs).Run() // may not exist
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", fs).Run() })
 	if out, err := exec.Command("docker", "run", "-d", "--name", fs, "-e", "RUSTFS_ACCESS_KEY=ztaccess", "-e", "RUSTFS_SECRET_KEY=ztsecret123",
 		"-e", "RUSTFS_ADDRESS=:9000", "-e", "RUSTFS_CONSOLE_ENABLE=false", "rustfs/rustfs:latest").CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)

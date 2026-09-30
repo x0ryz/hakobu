@@ -73,9 +73,14 @@ func TestDBJobs(t *testing.T) {
 
 func TestBuildDir(t *testing.T) {
 	clone := t.TempDir()
-	os.MkdirAll(filepath.Join(clone, "web"), 0o755)
-	os.Symlink("/etc", filepath.Join(clone, "escape"))
-	os.Symlink("web", filepath.Join(clone, "alias"))
+	if err := os.MkdirAll(filepath.Join(clone, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{"escape": "/etc", "alias": "web"} {
+		if err := os.Symlink(target, filepath.Join(clone, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for path, ok := range map[string]bool{"": true, ".": true, "/web/": true, "alias": true, "escape": false, "../..": false, "missing": false} {
 		if _, err := buildDir(clone, path); (err == nil) != ok {
 			t.Errorf("buildDir(%q) error = %v", path, err)
@@ -111,7 +116,7 @@ func fakeR2(t *testing.T) (objects map[string][]byte, lock *string) {
 			fmt.Fprint(w, ok)
 		case isObject && r.Method == "GET":
 			if b, found := objects[key]; found {
-				w.Write(b)
+				_, _ = w.Write(b)
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -137,8 +142,12 @@ func TestR2Backups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.SaveCloudflareToken(ctx(), store.SaveCloudflareTokenParams{AccessToken: "tok", RefreshToken: "r", ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)})
-	s.SaveCloudflareTunnel(ctx(), store.SaveCloudflareTunnelParams{AccountID: "acc", TunnelID: "t"})
+	if err := s.SaveCloudflareToken(ctx(), store.SaveCloudflareTokenParams{AccessToken: "tok", RefreshToken: "r", ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveCloudflareTunnel(ctx(), store.SaveCloudflareTunnelParams{AccountID: "acc", TunnelID: "t"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := uploadParts(s, "k", strings.NewReader("x"), 1); err == nil {
 		t.Error("uploaded before backups were set up")
@@ -176,7 +185,9 @@ func TestR2Backups(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 7 {
-		s.CreateBackup(ctx(), store.CreateBackupParams{Database: "main", ObjectKey: fmt.Sprint("newer", i), Parts: 0})
+		if _, err := s.CreateBackup(ctx(), store.CreateBackupParams{Database: "main", ObjectKey: fmt.Sprint("newer", i), Parts: 0}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := RotateBackups(s, "main", time.Now().AddDate(1, 0, 0)); err != nil {
 		t.Fatal(err)
