@@ -36,15 +36,19 @@ func oomText(app store.App) string {
 // in the app's Errors tab, reconnecting to Docker whenever the stream breaks.
 func WatchOOM(s *store.Store) {
 	for {
-		err := deploy.WatchOOM(context.Background(), func(container, appName string) {
+		err := deploy.WatchOOM(context.Background(), func(container, appName string, sure bool) {
 			app, err := s.GetApp(ctx(), appName)
 			if err != nil {
 				fmt.Println(container, "was killed: out of memory")
 				return
 			}
+			reason := "was killed: " + oomText(app)
+			if !sure {
+				reason = "was killed (exit 137), most likely because " + oomText(app)
+			}
 			if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
 				AppName: app.Name, Kind: "oom", Level: "fatal",
-				Message: fmt.Sprintf("%s was killed: %s. Docker restarts it.", container, oomText(app)),
+				Message: fmt.Sprintf("%s %s. Docker restarts it.", container, reason),
 			}); err != nil {
 				fmt.Println("failed to record an out-of-memory kill of", container+":", err)
 			}

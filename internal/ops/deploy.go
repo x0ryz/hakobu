@@ -395,11 +395,12 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 
 	var port int64
 	var loopbackOnly []int
-	var crashed, oom bool
+	var crashed, oom, killed bool
 	healthy := deploy.WaitHealthy(60, time.Second, func() bool {
 		// A container that exits or restarts will never answer; stop waiting.
 		if st := deploy.ContainerState(ctx(), candidate); st.Status == "exited" || st.Status == "dead" || st.Restarts > 0 || st.OOMKilled {
-			crashed, oom = true, st.OOMKilled
+			st = awaitOOMFlag(app, candidate, st)
+			crashed, oom, killed = true, st.OOMKilled, st.ExitCode == 137
 			return true
 		}
 		port = app.ContainerPort
@@ -418,6 +419,8 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		switch {
 		case oom:
 			reason = "was killed: " + oomText(app)
+		case killed && app.MemoryMB > 0:
+			reason = "was killed (exit 137), most likely because " + oomText(app)
 		case crashed:
 			reason = "exited while starting (see its output below; a missing variable or an unreachable database are the usual causes)"
 		case port == 0 && len(loopbackOnly) > 0:
@@ -476,6 +479,18 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	}
 	fmt.Fprintf(out, "live: container port %d, 127.0.0.1:%d (%s)\n", port, app.Port, imageTag)
 	return nil
+}
+
+// awaitOOMFlag rereads a stopped container's state for up to a second when
+// it may have run out of memory but isn't flagged yet: Docker can report the
+// exit before the OOM kill (seen under rootless Docker). Only a container
+// with a memory limit gets the flag, so others aren't kept waiting.
+func awaitOOMFlag(app store.App, container string, st deploy.State) deploy.State {
+	for i := 0; i < 5 && !st.OOMKilled && app.MemoryMB > 0; i++ {
+		time.Sleep(200 * time.Millisecond)
+		st = deploy.ContainerState(ctx(), container)
+	}
+	return st
 }
 
 // restartContainer brings a stopped previous version back after a failed

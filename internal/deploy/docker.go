@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -653,6 +654,7 @@ type State struct {
 	Status    string // docker's state ("running", "exited", ...), "not found" or "unknown"
 	Restarts  int    // surfaces crash loops
 	OOMKilled bool   // the last exit was the kernel killing it for memory
+	ExitCode  int    // of the last exit; 137 is SIGKILL
 }
 
 func ContainerState(ctx context.Context, containerName string) State {
@@ -663,7 +665,7 @@ func ContainerState(ctx context.Context, containerName string) State {
 	if info == nil {
 		return State{Status: "not found"}
 	}
-	return State{Status: info.State.Status, Restarts: info.RestartCount, OOMKilled: info.State.OOMKilled}
+	return State{Status: info.State.Status, Restarts: info.RestartCount, OOMKilled: info.State.OOMKilled, ExitCode: info.State.ExitCode}
 }
 
 // ContainerStatus is ContainerState's status and restart count.
@@ -675,8 +677,14 @@ func ContainerStatus(ctx context.Context, containerName string) (status string, 
 // WatchOOM calls fn for every container the kernel kills for running out of
 // memory, until ctx ends or the event stream breaks. app is the container's
 // AppLabel, "" for services such as Postgres.
-func WatchOOM(ctx context.Context, fn func(container, app string)) error {
-	filters, _ := json.Marshal(map[string][]string{"type": {"container"}, "event": {"oom"}})
+//
+// Docker doesn't always notice: under rootless Docker a main process the
+// kernel kills often exits with no "oom" event. So a container that dies
+// from SIGKILL (exit 137) Docker didn't send (no "kill" event since it
+// started) is reported too, with sure=false: the kernel's OOM killer is
+// almost always what sends it.
+func WatchOOM(ctx context.Context, fn func(container, app string, sure bool)) error {
+	filters, _ := json.Marshal(map[string][]string{"type": {"container"}, "event": {"oom", "kill", "die", "start"}})
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/events?filters="+url.QueryEscape(string(filters)), nil)
 	if err != nil {
 		return err
@@ -690,19 +698,61 @@ func WatchOOM(ctx context.Context, fn func(container, app string)) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("events failed (%d): %s", resp.StatusCode, body)
 	}
+
+	// Per container ID, since its last start. The "oom" event may also come
+	// just after "die", so a SIGKILL death is reported after a short wait
+	// unless the "oom" arrives meanwhile.
+	var mu sync.Mutex
+	killed := map[string]bool{}  // Docker sent it a signal
+	oomSeen := map[string]bool{} // reported for sure
+	pending := map[string]bool{} // died from SIGKILL, "oom" may still come
 	dec := json.NewDecoder(resp.Body)
 	for {
 		var ev struct {
-			Actor struct {
+			Action string `json:"Action"`
+			Actor  struct {
+				ID         string            `json:"ID"`
 				Attributes map[string]string `json:"Attributes"`
 			} `json:"Actor"`
 		}
 		if err := dec.Decode(&ev); err != nil {
 			return err
 		}
-		fn(ev.Actor.Attributes["name"], ev.Actor.Attributes[AppLabel])
+		id, attrs := ev.Actor.ID, ev.Actor.Attributes
+		name, app := attrs["name"], attrs[AppLabel]
+		mu.Lock()
+		switch ev.Action {
+		case "start":
+			delete(killed, id)
+			delete(oomSeen, id)
+		case "kill":
+			killed[id] = true
+		case "oom":
+			if !oomSeen[id] {
+				oomSeen[id] = true
+				delete(pending, id)
+				fn(name, app, true)
+			}
+		case "die":
+			if attrs["exitCode"] == "137" && !killed[id] && !oomSeen[id] {
+				pending[id] = true
+				time.AfterFunc(oomEventGrace, func() {
+					mu.Lock()
+					defer mu.Unlock()
+					if pending[id] {
+						delete(pending, id)
+						fn(name, app, false)
+					}
+				})
+			}
+			delete(killed, id)
+		}
+		mu.Unlock()
 	}
 }
+
+// oomEventGrace is how long a SIGKILL death waits for a late "oom" event.
+const oomEventGrace = time.Second
 
 // TagImage points targetRef ("repo:tag") at sourceRef's image.
 func TagImage(ctx context.Context, sourceRef, targetRef string) error {
