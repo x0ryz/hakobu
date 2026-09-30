@@ -48,6 +48,7 @@ func CreateProject(s *store.Store, name string) error {
 	if err := checkName("project", name); err != nil {
 		return err
 	}
+	// Its networks are created when it first needs them.
 	return s.CreateProject(ctx(), name)
 }
 
@@ -85,6 +86,9 @@ func DeleteProject(s *store.Store, name string) error {
 		}
 	}
 	if err := s.DeleteSealedVarsOf(ctx(), store.DeleteSealedVarsOfParams{Scope: "project", Owner: name}); err != nil {
+		return err
+	}
+	if err := removeProjectNetworks(name); err != nil {
 		return err
 	}
 	return s.DeleteProject(ctx(), name)

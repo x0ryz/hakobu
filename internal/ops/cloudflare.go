@@ -20,11 +20,13 @@ import (
 // to the app's live container on the edge network, and everything else to
 // the panel's unix socket.
 const (
-	tunnelContainer = "hakobu-cloudflared"
 	// PanelSocketDir holds panel.sock, the panel's socket for cloudflared.
 	PanelSocketDir = "run"
 	panelService   = "unix:/run/hakobu/panel.sock"
 )
+
+// tunnelContainer runs cloudflared; tests use another name.
+var tunnelContainer = "hakobu-cloudflared"
 
 // EdgeAlias is the app's name on the edge network. App and container names
 // have no dots, so it can't clash with a container name.
@@ -42,14 +44,18 @@ func StartTunnel(s *store.Store) error {
 		return err
 	}
 	if env != nil && env["TUNNEL_TOKEN"] == string(cf.TunnelToken) {
-		return deploy.StartContainer(ctx(), tunnelContainer)
+		err = deploy.StartContainer(ctx(), tunnelContainer)
+	} else {
+		var dir string
+		if dir, err = filepath.Abs(PanelSocketDir); err == nil {
+			_, err = deploy.RunTunnelContainer(ctx(), tunnelContainer, config.CloudflaredImage, string(cf.TunnelToken), dir)
+		}
 	}
-	dir, err := filepath.Abs(PanelSocketDir)
 	if err != nil {
 		return err
 	}
-	_, err = deploy.RunTunnelContainer(ctx(), tunnelContainer, config.CloudflaredImage, string(cf.TunnelToken), dir)
-	return err
+	// A new container is on no project's edge network yet.
+	return ensureAllProjectNetworks(s)
 }
 
 var (

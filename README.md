@@ -3,7 +3,8 @@
 Deploy apps from GitHub to your own server. Push to the default branch and
 hakobu rebuilds and rolls out the new version with zero downtime.
 
-- **Projects** group apps, PostgreSQL databases, S3 storages and shared variables.
+- **Projects** group apps, PostgreSQL databases, S3 storages and shared variables. Each project has its own
+  Docker networks: an app can reach its project's apps, databases and storages, never another project's apps.
 - **Apps** come from GitHub repos, built with a Dockerfile or [Railpack](https://railpack.com) (auto-detected).
 - **Zero-downtime deploys** with blue/green containers behind an in-process proxy, plus one-click rollback.
   Before each deploy the app's database is snapshotted on the server, so a rollback can also undo a bad migration.

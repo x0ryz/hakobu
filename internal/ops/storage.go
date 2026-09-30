@@ -13,11 +13,10 @@ import (
 )
 
 // RustFS is the optional self-hosted S3 service, one container shared by all
-// "rustfs" storages (one bucket each).
-const (
-	rustfsContainer = "hakobu-rustfs"
-	rustfsPort      = "9000"
-)
+// "rustfs" storages (one bucket each). Tests run their own.
+var rustfsContainer = "hakobu-rustfs"
+
+const rustfsPort = "9000"
 
 func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 	if err := checkName("storage", st.Name); err != nil {
@@ -37,6 +36,9 @@ func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 	switch st.Provider {
 	case "rustfs":
 		if err := provisionRustFS(&st); err != nil {
+			return err
+		}
+		if err := ensureProjectNetworks(projectName); err != nil {
 			return err
 		}
 	case "r2", "s3":
@@ -105,7 +107,7 @@ func rustfsRoot(bucket string) (*s3.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	ip, err := deploy.ContainerIP(ctx(), rustfsContainer)
+	ip, err := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
 	if err != nil {
 		return nil, err
 	}

@@ -174,6 +174,12 @@ func newDockerTestApp(t *testing.T, s *store.Store) store.App {
 		t.Fatal(err)
 	}
 	p, _ := s.GetProject(ctx(), project)
+	// Runs after the tests' own cleanups (LIFO), once the apps are gone.
+	t.Cleanup(func() {
+		if err := removeProjectNetworks(project); err != nil {
+			t.Error(err)
+		}
+	})
 	for i := 0; ; i++ {
 		name := fmt.Sprintf("zt%s-%d", suffix, i)
 		if err := s.CreateApp(ctx(), store.CreateAppParams{ProjectID: p.ID, Name: name, BuildStrategy: "dockerfile"}); err != nil {
@@ -210,7 +216,7 @@ func expectServing(t *testing.T, app store.App, want string) {
 	t.Helper()
 	// What cloudflared sees: the app's alias on the edge network, served
 	// by the live container only.
-	edge := dockerOut(t, "run", "--rm", "--quiet", "--network", deploy.EdgeNetwork, "busybox:1.36",
+	edge := dockerOut(t, "run", "--rm", "--quiet", "--network", projectEdge(app.ProjectName), "busybox:1.36",
 		"sh", "-c", fmt.Sprintf("nslookup %s 127.0.0.11 | grep -c '^Address' ; wget -qO- http://%s:8080/", EdgeAlias(app.Name), EdgeAlias(app.Name)))
 	if edge != "2\n"+want { // the resolver's own address, then exactly one container
 		t.Errorf("edge network serves %q, want one address and %q", edge, want)
@@ -257,14 +263,10 @@ func dockerOut(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestDockerRustFSStorages uses the real hakobu-rustfs container name, so it
-// only runs where there's none and removes it afterwards.
+// TestDockerRustFSStorages runs its own RustFS (see TestMain).
 func TestDockerRustFSStorages(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
-	}
-	if st, _ := deploy.ContainerStatus(ctx(), rustfsContainer); st != "not found" {
-		t.Skip(rustfsContainer + " exists; not touching it")
 	}
 	t.Cleanup(func() {
 		_ = deploy.RemoveContainer(ctx(), rustfsContainer)
@@ -277,6 +279,11 @@ func TestDockerRustFSStorages(t *testing.T) {
 	if err := CreateProject(s, "p"); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := removeProjectNetworks("p"); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, name := range []string{"files", "media"} {
 		if err := CreateStorage(s, "p", store.Storage{Name: name, Provider: "rustfs"}); err != nil {
 			t.Fatal(err)
@@ -290,7 +297,7 @@ func TestDockerRustFSStorages(t *testing.T) {
 	}
 
 	// files' keys reach its bucket, not media's.
-	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer)
+	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
 	as := func(keys, bucket store.Storage) error {
 		keys.Endpoint, keys.Bucket = "http://"+ip+":"+rustfsPort, bucket.Bucket
 		return s3.NewClient(keys).CreateBucket()
@@ -454,14 +461,10 @@ func TestDockerDataRollback(t *testing.T) {
 	}
 }
 
-// TestDockerRotateSecrets runs its own Postgres and, where there's no
-// hakobu-rustfs container, RustFS.
+// TestDockerRotateSecrets runs its own Postgres and RustFS.
 func TestDockerRotateSecrets(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
-	}
-	if st, _ := deploy.ContainerStatus(ctx(), rustfsContainer); st != "not found" {
-		t.Skip(rustfsContainer + " exists; not touching it")
 	}
 	suffix, _ := RandomHex(3)
 	oldPG := PostgresContainer
@@ -525,14 +528,14 @@ func TestDockerRotateSecrets(t *testing.T) {
 	// The new database password works, the old one doesn't, connecting
 	// like an app does (inside its container Postgres trusts localhost).
 	login := func(pw string) error {
-		return exec.Command("docker", "run", "--rm", "--quiet", "--network", deploy.NetworkName, "-e", "PGPASSWORD="+pw, "postgres:18",
+		return exec.Command("docker", "run", "--rm", "--quiet", "--network", ProjectNetwork(app.ProjectName), "-e", "PGPASSWORD="+pw, "postgres:18",
 			"psql", "-h", PostgresContainer, "-U", dbAfter.User, "-d", dbAfter.Name, "-c", "SELECT 1").Run()
 	}
 	if login(string(dbAfter.Password)) != nil || login(string(dbBefore.Password)) == nil {
 		t.Error("database password not rotated")
 	}
 	// The storage's new keys work, the old ones are revoked.
-	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer)
+	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
 	reach := func(st store.Storage) error {
 		st.Endpoint = "http://" + ip + ":" + rustfsPort
 		return s3.NewClient(st).CreateBucket()
@@ -554,5 +557,59 @@ func TestDockerRotateSecrets(t *testing.T) {
 	}
 	if !slices.ContainsFunc(manual, func(m string) bool { return strings.Contains(m, "API_KEY") && strings.Contains(m, "SEALED") }) {
 		t.Errorf("the user's variables aren't listed to replace: %v", manual)
+	}
+}
+
+func TestDockerProjectIsolation(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	s, err := store.Open(filepath.Join(t.TempDir(), "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// newDockerTestApp puts each app in a project of its own.
+	a, b := newDockerTestApp(t, s), newDockerTestApp(t, s)
+	for _, app := range []store.App{a, b} {
+		buildTestImage(t, nextImageTag(app), app.Name)
+		var out strings.Builder
+		if err := rollOut(s, app, nextImageTag(app), &out); err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+	}
+	a, _ = s.GetApp(ctx(), a.Name)
+	b, _ = s.GetApp(ctx(), b.Name)
+	bIP, err := deploy.ContainerIP(ctx(), b.ContainerName(), ProjectNetwork(b.ProjectName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// From a container on a's networks, what answers?
+	reach := func(network, target string) bool {
+		return exec.Command("docker", "run", "--rm", "--quiet", "--network", network, "busybox:1.36",
+			"wget", "-q", "-T", "3", "-O", "/dev/null", "http://"+target+":8080/").Run() == nil
+	}
+	if !reach(ProjectNetwork(a.ProjectName), a.ContainerName()) {
+		t.Error("an app isn't reachable in its own project")
+	}
+	for _, target := range []string{b.ContainerName(), bIP} {
+		if reach(ProjectNetwork(a.ProjectName), target) {
+			t.Errorf("another project's app is reachable at %s", target)
+		}
+	}
+	if reach(projectEdge(a.ProjectName), EdgeAlias(b.Name)) {
+		t.Error("another project's app is reachable on the edge network")
+	}
+
+	// Deleting a project removes its networks.
+	if err := DeleteProject(s, b.ProjectName); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{ProjectNetwork(b.ProjectName), projectEdge(b.ProjectName)} {
+		if exec.Command("docker", "network", "inspect", n).Run() == nil {
+			t.Errorf("network %s left after deleting its project", n)
+		}
+	}
+	if err := DeleteProject(s, a.ProjectName); err != nil {
+		t.Fatal(err)
 	}
 }

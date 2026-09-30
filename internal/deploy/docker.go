@@ -18,10 +18,11 @@ import (
 	"time"
 )
 
-// NetworkName is where apps, workers and services talk to each other.
-// EdgeNetwork only holds cloudflared and each app's live container, under
-// the app's alias, so the tunnel reaches apps without going through hakobu.
-const (
+// NetworkName is the home network of hakobu's services (Postgres, RustFS),
+// EdgeNetwork cloudflared's. Apps live on their project's networks (see
+// ops), which the services and cloudflared join as needed. Tests use
+// networks of their own.
+var (
 	NetworkName = "hakobu"
 	EdgeNetwork = "hakobu-edge"
 )
@@ -58,6 +59,11 @@ func dockerRequest(ctx context.Context, method, path string, body any) ([]byte, 
 	return respBody, resp.StatusCode, err
 }
 
+// EnsureNetwork creates a bridge network unless it exists.
+func EnsureNetwork(ctx context.Context, name string) error {
+	return ensureNetwork(ctx, name)
+}
+
 func ensureNetwork(ctx context.Context, name string) error {
 	if _, status, err := dockerRequest(ctx, "GET", "/networks/"+name, nil); err == nil && status == http.StatusOK {
 		return nil
@@ -76,7 +82,7 @@ func ensureNetwork(ctx context.Context, name string) error {
 // one on the hakobu network (or hostConfig's NetworkMode), with
 // restart=unless-stopped unless hostConfig sets another restart policy.
 func runContainer(ctx context.Context, name string, spec map[string]any, hostConfig map[string]any) (string, error) {
-	if hostConfig["NetworkMode"] == nil {
+	if n, _ := hostConfig["NetworkMode"].(string); n == "" {
 		hostConfig["NetworkMode"] = NetworkName
 	}
 	if err := ensureNetwork(ctx, hostConfig["NetworkMode"].(string)); err != nil {
@@ -119,6 +125,7 @@ const AppLabel = "hakobu.app"
 // AppOptions are what an app's containers (app and worker) have in common.
 type AppOptions struct {
 	App      string
+	Network  string // the project's network
 	Env      []string
 	Binds    []string
 	MemoryMB int64   // 0: no limit
@@ -128,7 +135,8 @@ type AppOptions struct {
 func (o AppOptions) spec(imageTag string) (spec, hostConfig map[string]any) {
 	spec = map[string]any{"Image": imageTag, "Env": o.Env, "Labels": map[string]string{AppLabel: o.App}}
 	hostConfig = map[string]any{
-		"Binds": o.Binds,
+		"NetworkMode": o.Network,
+		"Binds":       o.Binds,
 		// setuid binaries can't raise privileges inside the container.
 		"SecurityOpt": []string{"no-new-privileges"},
 	}
@@ -204,10 +212,10 @@ func RunTunnelContainer(ctx context.Context, name, image, token, socketDir strin
 	})
 }
 
-// ConnectEdge puts a container on the edge network under alias; a no-op if
-// it's there already. Joining a second network leaves the container's
-// connections on the first one alone.
-func ConnectEdge(ctx context.Context, container, alias string) error {
+// ConnectNetwork adds a container to another network, with aliases if
+// given; a no-op if it's on it already. Joining a network leaves the
+// container's connections on its other networks alone.
+func ConnectNetwork(ctx context.Context, container, network string, aliases ...string) error {
 	info, err := inspect(ctx, container)
 	if err != nil {
 		return err
@@ -215,42 +223,55 @@ func ConnectEdge(ctx context.Context, container, alias string) error {
 	if info == nil {
 		return fmt.Errorf("container %q not found", container)
 	}
-	if _, ok := info.NetworkSettings.Networks[EdgeNetwork]; ok {
+	if _, ok := info.NetworkSettings.Networks[network]; ok {
 		return nil
 	}
-	if err := ensureNetwork(ctx, EdgeNetwork); err != nil {
+	if err := ensureNetwork(ctx, network); err != nil {
 		return err
 	}
-	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+EdgeNetwork+"/connect", map[string]any{
-		"Container": container, "EndpointConfig": map[string]any{"Aliases": []string{alias}},
+	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+url.PathEscape(network)+"/connect", map[string]any{
+		"Container": container, "EndpointConfig": map[string]any{"Aliases": aliases},
 	})
 	if err != nil {
 		return err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("connecting %s to %s failed (%d): %s", container, EdgeNetwork, status, respBody)
+		return fmt.Errorf("connecting %s to %s failed (%d): %s", container, network, status, respBody)
 	}
 	return nil
 }
 
-// DisconnectEdge takes a container off the edge network, so the tunnel
-// sends it no new requests; a no-op if it isn't on it.
-func DisconnectEdge(ctx context.Context, container string) error {
+// DisconnectNetwork takes a container off a network; a no-op if it isn't
+// on it or doesn't exist.
+func DisconnectNetwork(ctx context.Context, container, network string) error {
 	info, err := inspect(ctx, container)
 	if err != nil || info == nil {
 		return err
 	}
-	if _, ok := info.NetworkSettings.Networks[EdgeNetwork]; !ok {
+	if _, ok := info.NetworkSettings.Networks[network]; !ok {
 		return nil
 	}
-	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+EdgeNetwork+"/disconnect", map[string]any{"Container": container})
+	respBody, status, err := dockerRequest(ctx, "POST", "/networks/"+url.PathEscape(network)+"/disconnect", map[string]any{"Container": container})
 	if err != nil {
 		return err
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("disconnecting %s from %s failed (%d): %s", container, EdgeNetwork, status, respBody)
+		return fmt.Errorf("disconnecting %s from %s failed (%d): %s", container, network, status, respBody)
 	}
 	return nil
+}
+
+// RemoveNetwork deletes a network; a missing one is fine.
+func RemoveNetwork(ctx context.Context, name string) error {
+	respBody, status, err := dockerRequest(ctx, "DELETE", "/networks/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusNoContent, http.StatusOK, http.StatusNotFound:
+		return nil
+	}
+	return fmt.Errorf("removing network %s failed (%d): %s", name, status, respBody)
 }
 
 // StopContainer stops a container but keeps it, so it can be started again;
@@ -594,8 +615,8 @@ func ExposedPort(ctx context.Context, image string) int {
 	return ports[0]
 }
 
-// ContainerIP returns the container's address on the hakobu network.
-func ContainerIP(ctx context.Context, containerName string) (string, error) {
+// ContainerIP returns the container's address on network.
+func ContainerIP(ctx context.Context, containerName, network string) (string, error) {
 	info, err := inspect(ctx, containerName)
 	if err != nil {
 		return "", err
@@ -603,9 +624,9 @@ func ContainerIP(ctx context.Context, containerName string) (string, error) {
 	if info == nil {
 		return "", fmt.Errorf("container %q not found", containerName)
 	}
-	n, ok := info.NetworkSettings.Networks[NetworkName]
+	n, ok := info.NetworkSettings.Networks[network]
 	if !ok || n.IPAddress == "" {
-		return "", fmt.Errorf("container %q has no IP on network %q", containerName, NetworkName)
+		return "", fmt.Errorf("container %q has no IP on network %q", containerName, network)
 	}
 	return n.IPAddress, nil
 }

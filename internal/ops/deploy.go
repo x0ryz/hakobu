@@ -370,12 +370,16 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 		}
 	}
 
+	if err := ensureProjectNetworks(app.ProjectName); err != nil {
+		restoreOld()
+		return err
+	}
 	fmt.Fprintln(out, "starting", candidate)
 	if _, err := deploy.RunAppContainer(ctx(), imageTag, candidate, appOptions(app, env, binds)); err != nil {
 		restoreOld()
 		return err
 	}
-	ip, err := deploy.ContainerIP(ctx(), candidate)
+	ip, err := deploy.ContainerIP(ctx(), candidate, ProjectNetwork(app.ProjectName))
 	if err != nil {
 		deploy.RemoveContainer(ctx(), candidate)
 		restoreOld()
@@ -434,7 +438,9 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	// alias next to the old version.
 	for _, step := range []func() error{
 		func() error { return deploy.KeepRestarting(ctx(), candidate) },
-		func() error { return deploy.ConnectEdge(ctx(), candidate, EdgeAlias(app.Name)) },
+		func() error {
+			return deploy.ConnectNetwork(ctx(), candidate, projectEdge(app.ProjectName), EdgeAlias(app.Name))
+		},
 	} {
 		if err := step(); err != nil {
 			if rerr := deploy.RemoveContainer(ctx(), candidate); rerr != nil {
@@ -459,7 +465,7 @@ func rollOut(s *store.Store, app store.App, imageTag string, out io.Writer) erro
 	}
 	// The old version gets no new requests, then up to 10 seconds to
 	// finish the ones in flight.
-	if err := deploy.DisconnectEdge(ctx(), old); err != nil {
+	if err := deploy.DisconnectNetwork(ctx(), old, projectEdge(app.ProjectName)); err != nil {
 		fmt.Fprintln(out, "warning:", err)
 	}
 	if err := deploy.StopContainer(ctx(), old); err != nil {
@@ -482,7 +488,7 @@ func restartContainer(app store.App, name string, out io.Writer) {
 		fmt.Fprintln(out, "failed to start the previous version again:", err)
 		return
 	}
-	if ip, err := deploy.ContainerIP(ctx(), name); err == nil {
+	if ip, err := deploy.ContainerIP(ctx(), name, ProjectNetwork(app.ProjectName)); err == nil {
 		u, _ := url.Parse(fmt.Sprintf("http://%s:%d", ip, portHint(app, 0)))
 		proxy.SetTarget(app.Name, u)
 	}
@@ -520,7 +526,7 @@ func EnsureProxy(app store.App) {
 	if err != nil || !isNew {
 		return
 	}
-	ip, err := deploy.ContainerIP(ctx(), app.ContainerName())
+	ip, err := deploy.ContainerIP(ctx(), app.ContainerName(), ProjectNetwork(app.ProjectName))
 	if err != nil {
 		return
 	}
@@ -533,6 +539,9 @@ func RemoveProxy(name string) { proxy.Remove(name) }
 // Workers.
 
 func runWorker(s *store.Store, app store.App, w store.Worker, out io.Writer) error {
+	if err := ensureProjectNetworks(app.ProjectName); err != nil {
+		return err
+	}
 	env, err := WorkerEnv(s, app, w)
 	if err != nil {
 		return err
@@ -547,7 +556,7 @@ func runWorker(s *store.Store, app store.App, w store.Worker, out io.Writer) err
 }
 
 func appOptions(app store.App, env, binds []string) deploy.AppOptions {
-	return deploy.AppOptions{App: app.Name, Env: env, Binds: binds, MemoryMB: app.MemoryMB, CPUs: app.Cpus}
+	return deploy.AppOptions{App: app.Name, Network: ProjectNetwork(app.ProjectName), Env: env, Binds: binds, MemoryMB: app.MemoryMB, CPUs: app.Cpus}
 }
 
 // SaveWorker creates or updates the app's worker and restarts it if the

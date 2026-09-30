@@ -57,6 +57,9 @@ func CreateDatabase(s *store.Store, projectName, name string) error {
 	if err := ensurePostgres(); err != nil {
 		return fmt.Errorf("failed to start postgres: %w", err)
 	}
+	if err := ensureProjectNetworks(projectName); err != nil {
+		return err
+	}
 	password, err := RandomHex(16)
 	if err != nil {
 		return err
