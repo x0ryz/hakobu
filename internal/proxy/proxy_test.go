@@ -11,6 +11,7 @@ import (
 )
 
 func TestRemoveDropsKeptAliveConnections(t *testing.T) {
+	transport = http.DefaultTransport // the backends are on loopback, not container networks
 	backend := func(body string) *url.URL {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }))
 		t.Cleanup(srv.Close)

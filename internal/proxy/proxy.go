@@ -10,7 +10,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sync"
+
+	"github.com/x0ryz/hakobu/internal/deploy"
 )
+
+// transport reaches the containers; tests point it at local backends.
+var transport http.RoundTripper = deploy.ContainerTransport
 
 type appProxy struct {
 	mu     sync.RWMutex
@@ -25,7 +30,9 @@ func (p *appProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no backend available yet", http.StatusBadGateway)
 		return
 	}
-	httputil.NewSingleHostReverseProxy(target).ServeHTTP(w, r)
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.Transport = transport
+	rp.ServeHTTP(w, r)
 }
 
 type entry struct {

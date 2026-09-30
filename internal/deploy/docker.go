@@ -1,4 +1,4 @@
-// Package deploy talks to the Docker Engine API over /var/run/docker.sock.
+// Package deploy talks to the Docker Engine API over its unix socket.
 package deploy
 
 import (
@@ -27,10 +27,19 @@ var (
 	EdgeNetwork = "hakobu-edge"
 )
 
+// dockerSocket is the daemon's socket: DOCKER_HOST (unix:// only) when set,
+// as under rootless Docker, else the rootful default.
+func dockerSocket() string {
+	if p, ok := strings.CutPrefix(os.Getenv("DOCKER_HOST"), "unix://"); ok && p != "" {
+		return p
+	}
+	return "/var/run/docker.sock"
+}
+
 var dockerClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+			return (&net.Dialer{}).DialContext(ctx, "unix", dockerSocket())
 		},
 	},
 }
@@ -352,6 +361,13 @@ func pullImageIfMissing(ctx context.Context, image string) error {
 	return nil
 }
 
+// healthTransport keeps no connections: each check reaches a fresh candidate.
+var healthTransport = func() *http.Transport {
+	t := newContainerTransport()
+	t.DisableKeepAlives = true
+	return t
+}()
+
 // HTTPCheck GETs url. With requireOK, only a 2xx counts as healthy; without
 // it any response does (the app may never have handled a bare "/").
 func HTTPCheck(url string, requireOK bool) bool {
@@ -360,6 +376,7 @@ func HTTPCheck(url string, requireOK bool) bool {
 		// The app answers for itself; following its redirects would let it
 		// point hakobu at anything reachable from the host.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     healthTransport,
 	}
 	resp, err := client.Get(url)
 	if err != nil {

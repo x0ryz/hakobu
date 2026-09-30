@@ -2,6 +2,7 @@ package ops
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -111,10 +112,18 @@ func rustfsRoot(bucket string) (*s3.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s3.NewClient(store.Storage{
+	return rustfsClient(store.Storage{
 		Endpoint: "http://" + ip + ":" + rustfsPort, Bucket: bucket,
 		AccessKeyID: env["RUSTFS_ACCESS_KEY"], SecretAccessKey: secret.String(env["RUSTFS_SECRET_KEY"]),
 	}), nil
+}
+
+// rustfsClient talks to RustFS at its container IP, which only the container
+// dialer reaches under rootless Docker.
+func rustfsClient(st store.Storage) *s3.Client {
+	c := s3.NewClient(st)
+	c.HTTP = &http.Client{Transport: deploy.ContainerTransport}
+	return c
 }
 
 func DeleteStorage(s *store.Store, name string) error {

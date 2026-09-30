@@ -27,6 +27,8 @@ type Client struct {
 	bucket          string
 	accessKeyID     string
 	secretAccessKey string
+	// HTTP sends the requests; nil is http.DefaultClient.
+	HTTP *http.Client
 }
 
 // Endpoint derives R2's endpoint from the account ID; other providers use
@@ -115,7 +117,11 @@ func (c *Client) call(method, path string, query url.Values, body []byte, okStat
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	hc := c.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("s3 %s %s: %w", method, path, err)
 	}

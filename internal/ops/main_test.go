@@ -12,6 +12,7 @@ import (
 // tests never touch a real hakobu's Postgres, RustFS, cloudflared or
 // networks on the same Docker.
 func TestMain(m *testing.M) {
+	deploy.RunDialerIfChild() // rootless Docker: this binary is the dialer too
 	id := fmt.Sprint(os.Getpid())
 	PostgresContainer = "zt-postgres-" + id
 	rustfsContainer = "zt-rustfs-" + id

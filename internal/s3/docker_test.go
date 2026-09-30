@@ -1,15 +1,22 @@
 package s3
 
 import (
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
+
+func TestMain(m *testing.M) {
+	deploy.RunDialerIfChild() // rootless Docker: this binary is the dialer too
+	os.Exit(m.Run())
+}
 
 // HAKOBU_DOCKER_TEST=1 go test ./internal/s3 -run Docker -v
 func TestDockerRustFSUsers(t *testing.T) {
@@ -30,25 +37,25 @@ func TestDockerRustFSUsers(t *testing.T) {
 	// creating it again is fine.
 	var err error
 	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
-		if err = NewClient(st).CreateBucket(); err == nil {
+		if err = containerClient(st).CreateBucket(); err == nil {
 			break
 		}
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewClient(st).CreateBucket(); err != nil {
+	if err := containerClient(st).CreateBucket(); err != nil {
 		t.Errorf("second create: %v", err)
 	}
 	st.SecretAccessKey = "wrong"
-	if err := NewClient(st).CreateBucket(); err == nil {
+	if err := containerClient(st).CreateBucket(); err == nil {
 		t.Error("a wrong key was accepted")
 	}
 	st.SecretAccessKey = "ztsecret123"
-	root := NewClient(st)
+	root := containerClient(st)
 	other := st
 	other.Bucket = "zt-other"
-	if err := NewClient(other).CreateBucket(); err != nil {
+	if err := containerClient(other).CreateBucket(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,14 +65,14 @@ func TestDockerRustFSUsers(t *testing.T) {
 	}
 	user := store.Storage{Endpoint: st.Endpoint, AccessKeyID: "hk0123456789abcdef01", SecretAccessKey: secret.String(strings.Repeat("s", 40))}
 	user.Bucket = "zt-bucket"
-	if err := NewClient(user).CreateBucket(); err != nil {
+	if err := containerClient(user).CreateBucket(); err != nil {
 		t.Errorf("user on its own bucket: %v", err)
 	}
 	user.Bucket = "zt-other"
-	if err := NewClient(user).CreateBucket(); err == nil || !strings.Contains(err.Error(), "403") {
+	if err := containerClient(user).CreateBucket(); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Errorf("user on another bucket: %v", err)
 	}
-	if err := NewClient(user).AddBucketUser("hkevil", "secretsecret"); err == nil {
+	if err := containerClient(user).AddBucketUser("hkevil", "secretsecret"); err == nil {
 		t.Error("a bucket user could use the admin API")
 	}
 
@@ -76,7 +83,15 @@ func TestDockerRustFSUsers(t *testing.T) {
 		}
 	}
 	user.Bucket = "zt-bucket"
-	if err := NewClient(user).CreateBucket(); err == nil {
+	if err := containerClient(user).CreateBucket(); err == nil {
 		t.Error("removed user still works")
 	}
+}
+
+// containerClient reaches RustFS's container IP, through the dialer under
+// rootless Docker.
+func containerClient(st store.Storage) *Client {
+	c := NewClient(st)
+	c.HTTP = &http.Client{Transport: deploy.ContainerTransport}
+	return c
 }

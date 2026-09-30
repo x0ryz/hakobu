@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/deploy"
-	"github.com/x0ryz/hakobu/internal/s3"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -300,7 +299,7 @@ func TestDockerRustFSStorages(t *testing.T) {
 	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
 	as := func(keys, bucket store.Storage) error {
 		keys.Endpoint, keys.Bucket = "http://"+ip+":"+rustfsPort, bucket.Bucket
-		return s3.NewClient(keys).CreateBucket()
+		return rustfsClient(keys).CreateBucket()
 	}
 	if err := as(files, files); err != nil {
 		t.Errorf("own bucket: %v", err)
@@ -538,7 +537,7 @@ func TestDockerRotateSecrets(t *testing.T) {
 	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
 	reach := func(st store.Storage) error {
 		st.Endpoint = "http://" + ip + ":" + rustfsPort
-		return s3.NewClient(st).CreateBucket()
+		return rustfsClient(st).CreateBucket()
 	}
 	if reach(stAfter) != nil || reach(stBefore) == nil {
 		t.Error("storage keys not rotated")
