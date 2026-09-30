@@ -123,6 +123,13 @@ type Project struct {
 	SharedEnv secret.String
 }
 
+type SealedVar struct {
+	Scope string
+	Owner string
+	Key   string
+	Value secret.String
+}
+
 type Session struct {
 	ID          string
 	GitHubLogin string

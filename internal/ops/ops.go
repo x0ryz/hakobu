@@ -84,6 +84,9 @@ func DeleteProject(s *store.Store, name string) error {
 			return err
 		}
 	}
+	if err := s.DeleteSealedVarsOf(ctx(), store.DeleteSealedVarsOfParams{Scope: "project", Owner: name}); err != nil {
+		return err
+	}
 	return s.DeleteProject(ctx(), name)
 }
 
@@ -209,7 +212,7 @@ func LinkStorage(s *store.Store, appName, storageName string) error {
 
 // Environment. Later entries win on duplicate keys, so the order is:
 // PORT, linked database, linked storage, SENTRY_DSN, project shared
-// variables, then the service's own variables.
+// variables (visible, then sealed), then the service's own (likewise).
 
 // baseEnv starts with PORT unless port is 0 (workers).
 func baseEnv(s *store.Store, app store.App, port int64) ([]string, error) {
@@ -248,12 +251,16 @@ func baseEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(string(p.SharedEnv))...), nil
+	return withScope(s, append(env, ParseEnv(string(p.SharedEnv))...), "project", p.Name)
 }
 
-// AppEnv is the environment of the app's next deploy.
-func AppEnv(s *store.Store, app store.App) ([]string, error) {
-	return appEnv(s, app, portHint(app, 0))
+// withScope adds a scope's sealed variables on top of env.
+func withScope(s *store.Store, env []string, scope, owner string) ([]string, error) {
+	sealed, err := sealedEnv(s, scope, owner)
+	if err != nil {
+		return nil, err
+	}
+	return append(env, sealed...), nil
 }
 
 func appEnv(s *store.Store, app store.App, port int64) ([]string, error) {
@@ -261,7 +268,7 @@ func appEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(string(app.Env))...), nil
+	return withScope(s, append(env, ParseEnv(string(app.Env))...), "app", app.Name)
 }
 
 func WorkerEnv(s *store.Store, app store.App, w store.Worker) ([]string, error) {
@@ -269,7 +276,7 @@ func WorkerEnv(s *store.Store, app store.App, w store.Worker) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	return append(env, ParseEnv(string(w.Env))...), nil
+	return withScope(s, append(env, ParseEnv(string(w.Env))...), "worker", app.Name)
 }
 
 // ParseEnv turns "KEY=value" lines into a docker env slice, skipping blank

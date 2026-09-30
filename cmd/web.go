@@ -206,7 +206,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		dbs, _ := s.ListDatabasesByProject(r.Context(), p.ID)
 		storages, _ := s.ListStoragesByProject(r.Context(), p.ID)
-		render(w, "project", map[string]any{"Project": p, "Apps": rows, "Databases": dbs, "Storages": storages})
+		render(w, "project", map[string]any{"Project": p, "Apps": rows, "Databases": dbs, "Storages": storages, "Sealed": ops.SealedKeys(s, "project", p.Name)})
 	})
 
 	action("DELETE /projects/{p}", func(r *http.Request) (string, error) {
@@ -214,7 +214,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /projects/{p}/env", func(r *http.Request) (string, error) {
-		return "", s.SetProjectSharedEnv(r.Context(), store.SetProjectSharedEnvParams{Name: r.PathValue("p"), SharedEnv: secret.String(r.FormValue("env"))})
+		return "", ops.SetSharedEnv(s, r.PathValue("p"), r.FormValue("env"))
 	})
 
 	handle("GET /projects/{p}/new-app", func(w http.ResponseWriter, r *http.Request) {
@@ -298,14 +298,16 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		p, _ := s.GetProject(r.Context(), app.ProjectName)
 		dbs, _ := s.ListDatabasesByProject(r.Context(), app.ProjectID)
 		storages, _ := s.ListStoragesByProject(r.Context(), app.ProjectID)
-		env, err := ops.AppEnv(s, app)
+		env, err := ops.EffectiveEnv(s, app)
 		envErr := ""
 		if err != nil {
 			envErr = err.Error()
 		}
 		data := map[string]any{
 			"App": newAppView(app), "Project": p, "Databases": dbs, "Storages": storages,
-			"Effective": splitEnv(env), "EnvError": envErr, "Zones": zoneNames(s),
+			"Effective": env, "EnvError": envErr, "Zones": zoneNames(s),
+			"SealedApp": ops.SealedKeys(s, "app", app.Name), "SealedWorker": ops.SealedKeys(s, "worker", app.Name),
+			"SealedProject": ops.SealedKeys(s, "project", app.ProjectName),
 		}
 		data["Sub"], data["Zone"] = splitDomain(app.Domain, data["Zones"].([]string))
 		data["Volumes"], _ = s.ListVolumes(r.Context(), app.Name)
@@ -401,7 +403,17 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /apps/{a}/env", func(r *http.Request) (string, error) {
-		return "", s.SetAppEnv(r.Context(), store.SetAppEnvParams{Name: r.PathValue("a"), Env: secret.String(r.FormValue("env"))})
+		return "", ops.SetAppEnv(s, r.PathValue("a"), r.FormValue("env"))
+	})
+
+	// Sealed variables of a project ("project", its name), app ("app") or
+	// worker ("worker", its app's name).
+	action("POST /sealed/{scope}/{owner}", func(r *http.Request) (string, error) {
+		return "", ops.SealVar(s, r.PathValue("scope"), r.PathValue("owner"), strings.TrimSpace(r.FormValue("key")), r.FormValue("value"))
+	})
+
+	action("DELETE /sealed/{scope}/{owner}/{key}", func(r *http.Request) (string, error) {
+		return "", ops.RemoveSealedVar(s, r.PathValue("scope"), r.PathValue("owner"), r.PathValue("key"))
 	})
 
 	handle("GET /apps/{a}/env/suggest", func(w http.ResponseWriter, r *http.Request) {

@@ -50,6 +50,25 @@
 </div>
 {{end}}
 
+{{/* Takes {Scope, Owner, Keys}: the sealed variables of a project, app or
+     worker. Values are never sent to the browser. */}}
+{{define "sealed-vars"}}
+<div class="space-y-2">
+  <div><h3 class="text-xs font-semibold">Sealed variables</h3><p class="text-xs text-faint">Passed to the containers but never shown again, not even to you: someone who gets into this panel can't copy them. Replace a value by sealing the same name again.</p></div>
+  {{range .Keys}}
+  <div class="flex items-center justify-between gap-3 text-sm">
+    <span class="mono"><span class="font-medium">{{.}}</span> <span class="text-faint">= ••••••• sealed</span></span>
+    <button hx-delete="/sealed/{{$.Scope}}/{{$.Owner}}/{{.}}" hx-confirm="Remove sealed variable {{.}}? It's gone from the next deploy on." class="link hover:text-bad">Remove</button>
+  </div>
+  {{end}}
+  <form hx-post="/sealed/{{.Scope}}/{{.Owner}}" class="flex flex-wrap gap-2">
+    <input name="key" placeholder="KEY" required class="input mono w-40">
+    <input name="value" type="password" placeholder="value" required autocomplete="new-password" class="input mono flex-1 min-w-48">
+    <button class="btn">Seal</button>
+  </form>
+</div>
+{{end}}
+
 {{/* Takes {Zones, Sub, Zone, Domain}. A domain outside the listed zones (or no
      zones at all) gets a plain text field, so saving never drops it. */}}
 {{define "domain-field"}}
@@ -195,6 +214,7 @@
     {{template "env-editor" (dict "Name" "env" "Value" .Project.SharedEnv "SuggestURL" "")}}
     <button class="btn">Save shared variables</button>
   </form>
+  {{template "sealed-vars" (dict "Scope" "project" "Owner" .Project.Name "Keys" .Sealed)}}
 </section>
 
 <div x-show="appModal" x-cloak @keydown.escape.window="appModal=false" class="fixed inset-0 z-40 flex items-start justify-center p-4 pt-24">
@@ -396,20 +416,30 @@
     {{template "env-editor" (dict "Name" "env" "Value" .App.Env "SuggestURL" (printf "/apps/%s/env/suggest" .App.Name))}}
     <button class="btn">Save</button>
   </form>
+  {{template "sealed-vars" (dict "Scope" "app" "Owner" .App.Name "Keys" .SealedApp)}}
   <div class="space-y-2">
     <div class="flex items-center justify-between"><h2 class="h2">Shared variables</h2><a href="/projects/{{.App.ProjectName}}" class="link">edit on the project →</a></div>
-    <pre class="console">{{if .Project.SharedEnv}}{{.Project.SharedEnv}}{{else}}(none){{end}}</pre>
+    <pre class="console">{{if .Project.SharedEnv}}{{.Project.SharedEnv}}{{else}}(none){{end}}{{range .SealedProject}}
+{{.}}=••••••• (sealed){{end}}</pre>
   </div>
   <div class="space-y-2">
     <h2 class="h2">Effective environment</h2>
     {{if .EnvError}}<p class="text-sm text-bad">{{.EnvError}}</p>{{end}}
     <div class="space-y-1">
       {{range .Effective}}
+      {{if .Sealed}}
+      <div class="flex gap-2 items-center mono">
+        <span class="w-2/5 truncate" title="{{.Key}}">{{.Key}}</span>
+        <span class="flex-1 truncate text-faint">••••••••</span>
+        <span class="text-xs text-faint w-8">sealed</span>
+      </div>
+      {{else}}
       <div class="flex gap-2 items-center mono" x-data="{show:false}">
         <span class="w-2/5 truncate" title="{{.Key}}">{{.Key}}</span>
         <span class="flex-1 truncate" :class="show ? '' : 'text-faint'" data-v="{{.Value}}" x-text="show ? $el.dataset.v : '••••••••'"></span>
         <button type="button" @click="show=!show" class="link w-8" x-text="show ? 'hide' : 'show'"></button>
       </div>
+      {{end}}
       {{end}}
     </div>
   </div>
@@ -452,6 +482,7 @@
     </div>
     <button class="btn">{{if .Worker}}Save and restart{{else}}Create worker{{end}}</button>
   </form>
+  {{if .Worker}}{{template "sealed-vars" (dict "Scope" "worker" "Owner" .App.Name "Keys" .SealedWorker)}}{{end}}
   {{if .Worker}}
   <div class="space-y-2">
     <div class="flex justify-between items-center"><h2 class="h2">Worker output</h2>

@@ -560,6 +560,9 @@ func SaveWorker(s *store.Store, w store.Worker) error {
 	if strings.TrimSpace(w.Command) == "" {
 		return fmt.Errorf("worker command is required")
 	}
+	if err := checkNotSealed(s, "worker", w.AppName, string(w.Env)); err != nil {
+		return err
+	}
 	if err := s.SaveWorker(ctx(), store.SaveWorkerParams(w)); err != nil {
 		return err
 	}
@@ -579,6 +582,9 @@ func RestartWorker(s *store.Store, app store.App) error {
 
 func DeleteWorker(s *store.Store, appName string) error {
 	if err := deploy.RemoveContainer(ctx(), appName+"-worker"); err != nil {
+		return err
+	}
+	if err := s.DeleteSealedVarsOf(ctx(), store.DeleteSealedVarsOfParams{Scope: "worker", Owner: appName}); err != nil {
 		return err
 	}
 	return s.DeleteWorker(ctx(), appName)

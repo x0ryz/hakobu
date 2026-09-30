@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -163,5 +164,98 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 	}
 	if stored == "tok" {
 		t.Error("session token stored as is")
+	}
+}
+
+func TestRotateMasterKey(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hakobu.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateProject(ctx, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectSharedEnv(ctx, SetProjectSharedEnvParams{Name: "demo", SharedEnv: "TOKEN=hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSealedVar(ctx, SetSealedVarParams{Scope: "app", Owner: "web", Key: "K", Value: "sealed"}); err != nil {
+		t.Fatal(err)
+	}
+	raw := func() string {
+		var v string
+		if err := s.db.QueryRow(`SELECT shared_env FROM projects`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	keyFile := filepath.Join(dir, "master.key")
+	oldKey, _ := os.ReadFile(keyFile)
+	before := raw()
+
+	if err := s.RotateMasterKey(); err != nil {
+		t.Fatal(err)
+	}
+	newKey, _ := os.ReadFile(keyFile)
+	if string(newKey) == string(oldKey) || raw() == before {
+		t.Error("the key and the stored value should both change")
+	}
+	if _, err := os.Stat(keyFile + ".new"); !os.IsNotExist(err) {
+		t.Error("master.key.new left behind")
+	}
+	if p, err := s.GetProject(ctx, "demo"); err != nil || p.SharedEnv != "TOKEN=hunter2" {
+		t.Errorf("after rotation: %q, %v", p.SharedEnv, err)
+	}
+	if v, err := s.ListSealedVars(ctx, ListSealedVarsParams{Scope: "app", Owner: "web"}); err != nil || v[0].Value != "sealed" {
+		t.Errorf("sealed var after rotation: %v, %v", v, err)
+	}
+
+	// A rotation cut short (new key written, nothing re-encrypted) is
+	// finished by the next Open.
+	if err := secret.BeginRotation(keyFile); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	if secret.Rotating() {
+		t.Error("Open didn't finish the rotation")
+	}
+	if _, err := os.Stat(keyFile + ".new"); !os.IsNotExist(err) {
+		t.Error("master.key.new left behind")
+	}
+	if p, err := s.GetProject(ctx, "demo"); err != nil || p.SharedEnv != "TOKEN=hunter2" {
+		t.Errorf("after an interrupted rotation: %q, %v", p.SharedEnv, err)
+	}
+}
+
+// TestSecretColumnsMatchSqlc: every column sqlc treats as a secret must be
+// re-encrypted by a key rotation.
+func TestSecretColumnsMatchSqlc(t *testing.T) {
+	b, err := os.ReadFile("../../sqlc.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for table, cols := range secretColumns {
+		for _, c := range cols {
+			listed[table+"."+c] = true
+		}
+	}
+	lines := strings.Split(string(b), "\n")
+	for i, line := range lines {
+		col, ok := strings.CutPrefix(strings.TrimSpace(line), "- column: ")
+		if !ok || i+1 >= len(lines) || !strings.Contains(lines[i+1], "type: String") || strings.HasPrefix(col, "app_view.") {
+			continue // app_view is a view over apps
+		}
+		if !listed[col] {
+			t.Errorf("%s is a secret in sqlc.yaml but not in secretColumns", col)
+		}
+		delete(listed, col)
+	}
+	for col := range listed {
+		t.Errorf("%s is in secretColumns but not a secret in sqlc.yaml", col)
 	}
 }

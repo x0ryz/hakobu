@@ -82,6 +82,27 @@ UPDATE apps SET snapshot_db = ?, snapshot_at = ? WHERE name = ?;
 -- name: SetAppLimits :exec
 UPDATE apps SET memory_mb = ?, cpus = ? WHERE name = ?;
 
+-- Sealed variables
+
+-- name: SetSealedVar :exec
+INSERT INTO sealed_vars (scope, owner, key, value) VALUES (?, ?, ?, ?)
+ON CONFLICT(scope, owner, key) DO UPDATE SET value = excluded.value;
+
+-- name: ListSealedVars :many
+SELECT * FROM sealed_vars WHERE scope = ? AND owner = ? ORDER BY key;
+
+-- name: ListAllSealedVars :many
+SELECT * FROM sealed_vars ORDER BY scope, owner, key;
+
+-- name: DeleteSealedVar :exec
+DELETE FROM sealed_vars WHERE scope = ? AND owner = ? AND key = ?;
+
+-- name: DeleteSealedVarsOf :exec
+DELETE FROM sealed_vars WHERE scope = ? AND owner = ?;
+
+-- name: DeleteAllSessions :exec
+DELETE FROM sessions;
+
 -- Volumes
 
 -- name: AddVolume :exec

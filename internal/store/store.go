@@ -20,7 +20,8 @@ import (
 
 type Store struct {
 	*Queries
-	db *sql.DB
+	db      *sql.DB
+	keyPath string
 }
 
 func Open(path string) (*Store, error) {
@@ -33,10 +34,87 @@ func Open(path string) (*Store, error) {
 	if err := migrate(db); err != nil {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	if err := secret.LoadKey(filepath.Join(filepath.Dir(path), "master.key")); err != nil {
+	s := &Store{Queries: New(db), db: db, keyPath: filepath.Join(filepath.Dir(path), "master.key")}
+	if err := secret.LoadKey(s.keyPath); err != nil {
 		return nil, fmt.Errorf("master key: %w", err)
 	}
-	return &Store{Queries: New(db), db: db}, nil
+	if secret.Rotating() { // cut short last time
+		if err := s.finishRotation(); err != nil {
+			return nil, fmt.Errorf("finishing the master key rotation: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// secretColumns are the columns sqlc maps to secret.String (sqlc.yaml);
+// TestSecretColumnsMatchSqlc keeps the two in step.
+var secretColumns = map[string][]string{
+	"projects":    {"shared_env"},
+	"apps":        {"env", "sentry_key"},
+	"workers":     {"env"},
+	"databases":   {"db_password"},
+	"storages":    {"secret_access_key"},
+	"github_app":  {"private_key", "webhook_secret", "client_secret"},
+	"cloudflare":  {"access_token", "refresh_token", "tunnel_token"},
+	"sealed_vars": {"value"},
+}
+
+// RotateMasterKey encrypts every secret with a new master key, so a copy
+// of the old key (and of the database) is worth nothing any more.
+func (s *Store) RotateMasterKey() error {
+	if err := secret.BeginRotation(s.keyPath); err != nil {
+		return err
+	}
+	return s.finishRotation()
+}
+
+// finishRotation re-encrypts every secret with the new key in one
+// transaction, then retires the old key.
+func (s *Store) finishRotation() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for table, cols := range secretColumns {
+		for _, col := range cols {
+			rows, err := tx.Query(fmt.Sprintf(`SELECT rowid, %s FROM %s WHERE %s != ''`, col, table, col))
+			if err != nil {
+				return err
+			}
+			values := map[int64]string{}
+			for rows.Next() {
+				var id int64
+				var v string
+				if err := rows.Scan(&id, &v); err != nil {
+					rows.Close()
+					return err
+				}
+				values[id] = v
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for id, v := range values {
+				plain, err := secret.Decrypt(v)
+				if err != nil {
+					return fmt.Errorf("%s.%s: %w", table, col, err)
+				}
+				enc, err := secret.Encrypt(plain)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(fmt.Sprintf(`UPDATE %s SET %s = ? WHERE rowid = ?`, table, col), enc, id); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return secret.FinishRotation(s.keyPath)
 }
 
 func (a App) ContainerName() string {
@@ -61,6 +139,11 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	q := s.WithTx(tx)
 	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
 		if err := del(ctx, name); err != nil {
+			return err
+		}
+	}
+	for _, scope := range []string{"app", "worker"} {
+		if err := q.DeleteSealedVarsOf(ctx, DeleteSealedVarsOfParams{Scope: scope, Owner: name}); err != nil {
 			return err
 		}
 	}

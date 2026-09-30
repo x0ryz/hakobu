@@ -263,6 +263,15 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 	return err
 }
 
+const deleteAllSessions = `-- name: DeleteAllSessions :exec
+DELETE FROM sessions
+`
+
+func (q *Queries) DeleteAllSessions(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllSessions)
+	return err
+}
+
 const deleteApp = `-- name: DeleteApp :exec
 DELETE FROM apps WHERE name = ?
 `
@@ -323,6 +332,35 @@ DELETE FROM projects WHERE name = ?
 
 func (q *Queries) DeleteProject(ctx context.Context, name string) error {
 	_, err := q.db.ExecContext(ctx, deleteProject, name)
+	return err
+}
+
+const deleteSealedVar = `-- name: DeleteSealedVar :exec
+DELETE FROM sealed_vars WHERE scope = ? AND owner = ? AND key = ?
+`
+
+type DeleteSealedVarParams struct {
+	Scope string
+	Owner string
+	Key   string
+}
+
+func (q *Queries) DeleteSealedVar(ctx context.Context, arg DeleteSealedVarParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSealedVar, arg.Scope, arg.Owner, arg.Key)
+	return err
+}
+
+const deleteSealedVarsOf = `-- name: DeleteSealedVarsOf :exec
+DELETE FROM sealed_vars WHERE scope = ? AND owner = ?
+`
+
+type DeleteSealedVarsOfParams struct {
+	Scope string
+	Owner string
+}
+
+func (q *Queries) DeleteSealedVarsOf(ctx context.Context, arg DeleteSealedVarsOfParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSealedVarsOf, arg.Scope, arg.Owner)
 	return err
 }
 
@@ -716,6 +754,38 @@ func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup
 	return items, nil
 }
 
+const listAllSealedVars = `-- name: ListAllSealedVars :many
+SELECT scope, owner, "key", value FROM sealed_vars ORDER BY scope, owner, key
+`
+
+func (q *Queries) ListAllSealedVars(ctx context.Context) ([]SealedVar, error) {
+	rows, err := q.db.QueryContext(ctx, listAllSealedVars)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SealedVar
+	for rows.Next() {
+		var i SealedVar
+		if err := rows.Scan(
+			&i.Scope,
+			&i.Owner,
+			&i.Key,
+			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllVolumes = `-- name: ListAllVolumes :many
 SELECT app_name, name, mount_path FROM volumes
 `
@@ -1058,6 +1128,43 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	for rows.Next() {
 		var i Project
 		if err := rows.Scan(&i.ID, &i.Name, &i.SharedEnv); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSealedVars = `-- name: ListSealedVars :many
+SELECT scope, owner, "key", value FROM sealed_vars WHERE scope = ? AND owner = ? ORDER BY key
+`
+
+type ListSealedVarsParams struct {
+	Scope string
+	Owner string
+}
+
+func (q *Queries) ListSealedVars(ctx context.Context, arg ListSealedVarsParams) ([]SealedVar, error) {
+	rows, err := q.db.QueryContext(ctx, listSealedVars, arg.Scope, arg.Owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SealedVar
+	for rows.Next() {
+		var i SealedVar
+		if err := rows.Scan(
+			&i.Scope,
+			&i.Owner,
+			&i.Key,
+			&i.Value,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1485,6 +1592,30 @@ type SetProjectSharedEnvParams struct {
 
 func (q *Queries) SetProjectSharedEnv(ctx context.Context, arg SetProjectSharedEnvParams) error {
 	_, err := q.db.ExecContext(ctx, setProjectSharedEnv, arg.SharedEnv, arg.Name)
+	return err
+}
+
+const setSealedVar = `-- name: SetSealedVar :exec
+
+INSERT INTO sealed_vars (scope, owner, key, value) VALUES (?, ?, ?, ?)
+ON CONFLICT(scope, owner, key) DO UPDATE SET value = excluded.value
+`
+
+type SetSealedVarParams struct {
+	Scope string
+	Owner string
+	Key   string
+	Value secret.String
+}
+
+// Sealed variables
+func (q *Queries) SetSealedVar(ctx context.Context, arg SetSealedVarParams) error {
+	_, err := q.db.ExecContext(ctx, setSealedVar,
+		arg.Scope,
+		arg.Owner,
+		arg.Key,
+		arg.Value,
+	)
 	return err
 }
 

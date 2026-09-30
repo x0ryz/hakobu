@@ -53,6 +53,18 @@ CREATE TABLE workers (
 	env TEXT NOT NULL DEFAULT ''
 );
 
+-- Variables whose value can't be read back, in the panel or anywhere else:
+-- they're only passed to the containers. scope is 'project', 'app' or
+-- 'worker', owner the project's or app's name. They go on top of the
+-- visible variables of the same scope.
+CREATE TABLE sealed_vars (
+	scope TEXT NOT NULL,
+	owner TEXT NOT NULL,
+	key TEXT NOT NULL,
+	value TEXT NOT NULL,
+	PRIMARY KEY (scope, owner, key)
+);
+
 -- Docker volumes mounted into an app and its worker.
 CREATE TABLE volumes (
 	app_name TEXT NOT NULL,
