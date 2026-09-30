@@ -21,7 +21,6 @@ import (
 // the panel's unix socket.
 const (
 	tunnelContainer = "hakobu-cloudflared"
-	tunnelImage     = "cloudflare/cloudflared:latest"
 	// PanelSocketDir holds panel.sock, the panel's socket for cloudflared.
 	PanelSocketDir = "run"
 	panelService   = "unix:/run/hakobu/panel.sock"
@@ -49,7 +48,7 @@ func StartTunnel(s *store.Store) error {
 	if err != nil {
 		return err
 	}
-	_, err = deploy.RunTunnelContainer(ctx(), tunnelContainer, tunnelImage, string(cf.TunnelToken), dir)
+	_, err = deploy.RunTunnelContainer(ctx(), tunnelContainer, config.CloudflaredImage, string(cf.TunnelToken), dir)
 	return err
 }
 

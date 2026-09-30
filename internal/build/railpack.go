@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/x0ryz/hakobu/internal/config"
 )
 
 func BuildWithStrategy(sourceDir, imageTag, strategy string, out io.Writer) error {
@@ -33,7 +35,7 @@ func ensureBuildKit(out io.Writer) {
 	}
 	if exec.Command("docker", "inspect", "buildkit").Run() != nil {
 		fmt.Fprintln(out, "starting buildkit container for railpack...")
-		if exec.Command("docker", "run", "--privileged", "-d", "--restart", "unless-stopped", "--name", "buildkit", "moby/buildkit").Run() != nil {
+		if exec.Command("docker", "run", "--privileged", "-d", "--restart", "unless-stopped", "--name", "buildkit", config.BuildKitImage).Run() != nil {
 			return
 		}
 	}

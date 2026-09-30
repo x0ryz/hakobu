@@ -32,7 +32,7 @@ func ensurePostgres() error {
 			return err
 		}
 		// Postgres 18+ images expect the volume at /var/lib/postgresql, older ones work with it too.
-		_, err = deploy.RunServiceContainer(ctx(), PostgresContainer, "postgres:"+config.PostgresVersion, []string{"POSTGRES_PASSWORD=" + password}, "/var/lib/postgresql")
+		_, err = deploy.RunServiceContainer(ctx(), PostgresContainer, config.PostgresImage, []string{"POSTGRES_PASSWORD=" + password}, "/var/lib/postgresql")
 	}
 	if err != nil {
 		return err

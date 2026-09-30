@@ -10,15 +10,14 @@ import (
 )
 
 var (
-	AgentAddr       = envString("HAKOBU_ADDR", "127.0.0.1:9000")
-	ReadTimeout     = envDuration("HAKOBU_READ_TIMEOUT", 15*time.Second)
-	WriteTimeout    = envDuration("HAKOBU_WRITE_TIMEOUT", 5*time.Minute)
-	IdleTimeout     = envDuration("HAKOBU_IDLE_TIMEOUT", 120*time.Second)
-	ProxyPollEvery  = envDuration("HAKOBU_PROXY_POLL", 10*time.Second)
-	BackupEvery     = envDuration("HAKOBU_BACKUP_EVERY", 24*time.Hour)
-	BackupKeep      = envInt("HAKOBU_BACKUP_KEEP", 7) // plus one a week for four weeks
-	RetentionDays   = envInt("HAKOBU_RETENTION_DAYS", 7)
-	PostgresVersion = envString("HAKOBU_POSTGRES_VERSION", "18")
+	AgentAddr      = envString("HAKOBU_ADDR", "127.0.0.1:9000")
+	ReadTimeout    = envDuration("HAKOBU_READ_TIMEOUT", 15*time.Second)
+	WriteTimeout   = envDuration("HAKOBU_WRITE_TIMEOUT", 5*time.Minute)
+	IdleTimeout    = envDuration("HAKOBU_IDLE_TIMEOUT", 120*time.Second)
+	ProxyPollEvery = envDuration("HAKOBU_PROXY_POLL", 10*time.Second)
+	BackupEvery    = envDuration("HAKOBU_BACKUP_EVERY", 24*time.Hour)
+	BackupKeep     = envInt("HAKOBU_BACKUP_KEEP", 7) // plus one a week for four weeks
+	RetentionDays  = envInt("HAKOBU_RETENTION_DAYS", 7)
 
 	// The Cloudflare OAuth client and the relay (relay/worker.js) that holds
 	// its callback until the installer that started the login fetches it.

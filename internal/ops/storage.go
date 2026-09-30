@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/s3"
 	"github.com/x0ryz/hakobu/internal/secret"
@@ -99,7 +100,7 @@ func rustfsRoot(bucket string) (*s3.Client, error) {
 		for k, v := range env {
 			list = append(list, k+"="+v)
 		}
-		_, err = deploy.RunServiceContainer(ctx(), rustfsContainer, "rustfs/rustfs:latest", list, "/data")
+		_, err = deploy.RunServiceContainer(ctx(), rustfsContainer, config.RustFSImage, list, "/data")
 	}
 	if err != nil {
 		return nil, err

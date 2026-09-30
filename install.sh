@@ -24,14 +24,28 @@ case "$(uname -m)" in
   *) echo "unsupported CPU architecture $(uname -m)"; exit 1 ;;
 esac
 
-echo "==> installing dependencies (docker, git, railpack, buildkit)"
+echo "==> installing dependencies (docker, git, railpack)"
 command -v curl >/dev/null || { apt-get update && apt-get install -y curl; } || yum install -y curl
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 command -v git >/dev/null || { apt-get update && apt-get install -y git; } || yum install -y git
-if ! command -v railpack >/dev/null; then
-  curl -fsSL https://railpack.com/install.sh | bash -s -- --yes || echo "WARNING: railpack install failed, only Dockerfile builds will work"
+# Railpack is pinned and checked like hakobu itself; hakobu starts the
+# BuildKit container it builds with (config/images.go) on the first build.
+RAILPACK_VERSION="v0.40.1"
+case "$ARCH" in
+  amd64) RAILPACK_TARGET="x86_64-unknown-linux-musl"; RAILPACK_SHA256="2842de93e68713af9037e0bc0a398d7da78f3b96aa4804303a638db2bc69bd30" ;;
+  arm64) RAILPACK_TARGET="arm64-unknown-linux-musl"; RAILPACK_SHA256="c24a064b586b8f4f8c2fab44dd5ef19253e4c6cc4e1df793b3ae19cd87f7a5d4" ;;
+esac
+if [ "$(railpack --version 2>/dev/null | grep -o 'v\?[0-9][0-9.]*' | head -1 | sed 's/^v*/v/')" != "$RAILPACK_VERSION" ]; then
+  TMP="$(mktemp -d)"
+  if curl -fsSL "https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${RAILPACK_TARGET}.tar.gz" -o "$TMP/railpack.tar.gz" \
+    && echo "${RAILPACK_SHA256}  $TMP/railpack.tar.gz" | sha256sum -c --quiet - \
+    && tar -xzf "$TMP/railpack.tar.gz" -C "$TMP" railpack; then
+    install -m 0755 "$TMP/railpack" /usr/local/bin/railpack
+  else
+    echo "WARNING: railpack install failed, only Dockerfile builds will work"
+  fi
+  rm -rf "$TMP"
 fi
-docker inspect buildkit >/dev/null 2>&1 || docker run --privileged -d --name buildkit --restart unless-stopped moby/buildkit >/dev/null
 
 echo "==> installing hakobu to /opt/hakobu"
 mkdir -p "$DATA"
