@@ -241,28 +241,25 @@ func dialVia(ctx context.Context, control *net.UnixConn, network, addr string) (
 	defer stop()
 	buf, oob := make([]byte, 512), make([]byte, syscall.CmsgSpace(4))
 	n, oobn, _, _, err := reply.ReadMsgUnix(buf, oob)
-	if ctx.Err() != nil {
+	// A socket that arrived is ours to close on every path but success,
+	// even when the caller gave up meanwhile.
+	fds := parseRights(oob[:oobn])
+	if len(fds) > 0 && err == nil && ctx.Err() == nil {
+		f := os.NewFile(uintptr(fds[0]), "container-conn")
+		defer f.Close() // FileConn dups it
+		closeFds(fds[1:])
+		return net.FileConn(f)
+	}
+	closeFds(fds)
+	switch {
+	case ctx.Err() != nil:
 		return nil, ctx.Err()
-	}
-	if err != nil {
+	case err != nil:
 		return nil, fmt.Errorf("dial %s: %w", addr, err) // our deadline passed
-	}
-	if n == 0 && oobn == 0 { // closed without an answer
+	case n == 0 && oobn == 0: // closed without an answer
 		return nil, errHelperGone
 	}
-	fds, err := parseRights(oob[:oobn])
-	if err != nil {
-		return nil, err
-	}
-	if len(fds) == 0 {
-		return nil, fmt.Errorf("dial %s: %s", addr, buf[:n])
-	}
-	f := os.NewFile(uintptr(fds[0]), "container-conn")
-	defer f.Close() // FileConn dups it
-	for _, fd := range fds[1:] {
-		syscall.Close(fd)
-	}
-	return net.FileConn(f)
+	return nil, fmt.Errorf("dial %s: %s", addr, buf[:n])
 }
 
 // RunDialerIfChild turns this process into the helper when hakobu started
@@ -288,11 +285,9 @@ func serveDialer(control *net.UnixConn, allowed func(ip net.IP) bool) {
 		if err != nil || (n == 0 && oobn == 0) {
 			return // hakobu is gone
 		}
-		fds, err := parseRights(oob[:oobn])
-		if err != nil || len(fds) != 1 {
-			for _, fd := range fds {
-				syscall.Close(fd)
-			}
+		fds := parseRights(oob[:oobn])
+		if len(fds) != 1 {
+			closeFds(fds)
 			continue
 		}
 		reply, err := unixConn(os.NewFile(uintptr(fds[0]), "reply"))
@@ -386,18 +381,21 @@ func unixConn(f *os.File) (*net.UnixConn, error) {
 	return uc, nil
 }
 
-func parseRights(oob []byte) ([]int, error) {
-	msgs, err := syscall.ParseSocketControlMessage(oob)
-	if err != nil {
-		return nil, err
-	}
+// parseRights returns the file descriptors that came with a message; the
+// kernel has already installed them, so the caller owns every one.
+func parseRights(oob []byte) []int {
+	msgs, _ := syscall.ParseSocketControlMessage(oob)
 	var fds []int
 	for _, m := range msgs {
-		got, err := syscall.ParseUnixRights(&m)
-		if err != nil {
-			return nil, err
+		if got, err := syscall.ParseUnixRights(&m); err == nil {
+			fds = append(fds, got...)
 		}
-		fds = append(fds, got...)
 	}
-	return fds, nil
+	return fds
+}
+
+func closeFds(fds []int) {
+	for _, fd := range fds {
+		_ = syscall.Close(fd)
+	}
 }

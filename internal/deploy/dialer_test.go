@@ -3,9 +3,12 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -101,5 +104,117 @@ func TestDialerGone(t *testing.T) {
 	theirs.Close() // the helper exited
 	if _, err := dialVia(context.Background(), control, "tcp", "127.0.0.1:1"); !errors.Is(err, errHelperGone) {
 		t.Errorf("got %v, want errHelperGone", err)
+	}
+}
+
+// Concurrent dials each get the connection they asked for.
+func TestDialerConcurrent(t *testing.T) {
+	control := startTestDialer(t)
+	var addrs []string
+	for i := range 10 {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		addrs = append(addrs, ln.Addr().String())
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = fmt.Fprint(c, i)
+				c.Close()
+			}
+		}()
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for n := range 200 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i := n % len(addrs)
+			conn, err := dialVia(context.Background(), control, "tcp", addrs[i])
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer conn.Close()
+			got, _ := io.ReadAll(conn)
+			if string(got) != fmt.Sprint(i) {
+				errs <- fmt.Errorf("dial %s reached listener %q, want %d", addrs[i], got, i)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// Every path, including callers that give up, gives back its descriptors.
+func TestDialerKeepsNoDescriptors(t *testing.T) {
+	control := startTestDialer(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	refused := closed.Addr().String()
+	closed.Close()
+
+	openFds := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Skip("no /proc/self/fd")
+		}
+		return len(entries)
+	}
+	round := func() {
+		var wg sync.WaitGroup
+		for i := range 50 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(i%5)*100*time.Microsecond+time.Microsecond)
+				defer cancel()
+				for _, addr := range []string{ln.Addr().String(), refused, "10.255.255.1:80"} {
+					if c, err := dialVia(ctx, control, "tcp", addr); err == nil {
+						c.Close()
+					}
+					if c, err := dialVia(context.Background(), control, "tcp", addr); err == nil {
+						c.Close()
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	round() // warm up the runtime's own descriptors
+	before := openFds()
+	for range 5 {
+		round()
+	}
+	// The helper closes its side from goroutines; give them a moment.
+	deadline := time.Now().Add(3 * time.Second)
+	for openFds() > before && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after := openFds(); after > before {
+		t.Errorf("%d descriptors open after 750 dials, %d before", after, before)
 	}
 }
