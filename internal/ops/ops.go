@@ -130,6 +130,21 @@ func CreateApp(s *store.Store, projectName string, app store.CreateAppParams, do
 	return StartDeploy(s, app.Name, "create")
 }
 
+// SetAppBuild changes how the app is built (strategy "railpack" or
+// "dockerfile", path of the build context inside the repo). Applies on the
+// next deploy; no need to delete and recreate the app.
+func SetAppBuild(s *store.Store, appName, path, strategy string) error {
+	strategy = strings.TrimSpace(strategy)
+	if strategy != "railpack" && strategy != "dockerfile" {
+		return fmt.Errorf("unknown build strategy %q: railpack or dockerfile", strategy)
+	}
+	path = strings.Trim(strings.TrimSpace(path), "/.")
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("invalid build path %q", path)
+	}
+	return s.SetAppBuild(ctx(), store.SetAppBuildParams{Name: appName, BuildPath: path, BuildStrategy: strategy})
+}
+
 // CheckDomain rejects a domain that the panel or another app already uses.
 func CheckDomain(s *store.Store, appName, domain string) error {
 	if domain == "" {

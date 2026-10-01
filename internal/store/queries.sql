@@ -49,6 +49,9 @@ UPDATE apps SET container_port = ?, health_check_path = ? WHERE name = ?;
 -- name: SetAppDomain :exec
 UPDATE apps SET domain = ?, dns_zone_id = ?, dns_record_id = ? WHERE name = ?;
 
+-- name: SetAppBuild :exec
+UPDATE apps SET build_path = ?, build_strategy = ? WHERE name = ?;
+
 -- name: SetAppLive :exec
 UPDATE apps SET active_slot = ?, live_port = ? WHERE name = ?;
 

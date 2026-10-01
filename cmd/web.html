@@ -344,6 +344,22 @@
     <button class="btn">Save</button>
   </form>
 
+  <form hx-post="/apps/{{.App.Name}}/build" class="card">
+    <h2 class="h2">Build</h2>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div>
+        <label class="label">Method</label>
+        <select name="build_strategy" class="input w-full">
+          <option value="railpack" {{if eq .App.BuildStrategy "railpack"}}selected{{end}}>Railpack (auto-detected)</option>
+          <option value="dockerfile" {{if eq .App.BuildStrategy "dockerfile"}}selected{{end}}>Dockerfile</option>
+        </select>
+      </div>
+      <div><label class="label">Path in repo</label><input name="build_path" value="{{.App.BuildPath}}" placeholder="empty = repo root, e.g. app" class="input w-full mono"></div>
+    </div>
+    <p class="text-xs text-faint">Applies on the next deploy: switch between Railpack and your own Dockerfile, or point at another directory, without deleting the app.</p>
+    <button class="btn">Save</button>
+  </form>
+
   <form hx-post="/apps/{{.App.Name}}/links" class="card">
     <h2 class="h2">Resources</h2>
     <div class="grid sm:grid-cols-2 gap-3">

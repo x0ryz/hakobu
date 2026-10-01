@@ -1443,6 +1443,21 @@ func (q *Queries) SaveWorker(ctx context.Context, arg SaveWorkerParams) error {
 	return err
 }
 
+const setAppBuild = `-- name: SetAppBuild :exec
+UPDATE apps SET build_path = ?, build_strategy = ? WHERE name = ?
+`
+
+type SetAppBuildParams struct {
+	BuildPath     string
+	BuildStrategy string
+	Name          string
+}
+
+func (q *Queries) SetAppBuild(ctx context.Context, arg SetAppBuildParams) error {
+	_, err := q.db.ExecContext(ctx, setAppBuild, arg.BuildPath, arg.BuildStrategy, arg.Name)
+	return err
+}
+
 const setAppDomain = `-- name: SetAppDomain :exec
 UPDATE apps SET domain = ?, dns_zone_id = ?, dns_record_id = ? WHERE name = ?
 `

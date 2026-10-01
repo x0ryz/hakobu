@@ -365,6 +365,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		})
 	})
 
+	action("POST /apps/{a}/build", func(r *http.Request) (string, error) {
+		return "", ops.SetAppBuild(s, r.PathValue("a"), r.FormValue("build_path"), r.FormValue("build_strategy"))
+	})
+
 	action("POST /apps/{a}/volumes", func(r *http.Request) (string, error) {
 		return "", ops.AddVolume(s, r.PathValue("a"), strings.TrimSpace(r.FormValue("name")), r.FormValue("mount_path"))
 	})
