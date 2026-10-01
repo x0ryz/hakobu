@@ -1,6 +1,8 @@
 package ops
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,6 +174,30 @@ func TestR2Backups(t *testing.T) {
 	got, err := io.ReadAll(&partsReader{s: s, b: b})
 	if err != nil || string(got) != dump {
 		t.Errorf("read back %q, %v", got, err)
+	}
+	// A restore gets the dump only if it's the one hakobu uploaded.
+	t.Chdir(t.TempDir()) // for tmpDir
+	sum := sha256.Sum256([]byte(dump))
+	b.SHA256 = hex.EncodeToString(sum[:])
+	if f, err := fetchBackup(s, b); err != nil {
+		t.Errorf("fetching an intact backup: %v", err)
+	} else {
+		got, _ := io.ReadAll(f)
+		f.Close()
+		os.Remove(f.Name())
+		if string(got) != dump {
+			t.Errorf("fetched %q", got)
+		}
+	}
+	objects["main/1.sql.gz/001"] = []byte("TAMPERED!!")
+	if f, err := fetchBackup(s, b); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Errorf("a tampered backup was fetched: %v", err)
+		if f != nil {
+			f.Close()
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmpDir, "restore-*")); len(left) != 0 {
+		t.Errorf("temporary files left: %v", left)
 	}
 	// An empty dump still makes one (empty) part, so it can be read.
 	if parts, _ := uploadParts(s, "empty", strings.NewReader(""), 0); parts != 1 {

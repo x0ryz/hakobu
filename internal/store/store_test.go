@@ -346,7 +346,7 @@ func TestRotationRewrapsSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := filepath.Join(dir, "snapshots", "web.sql.gz.enc")
+	snap := filepath.Join(dir, "snapshots", "web.dump.enc")
 	if err := os.MkdirAll(filepath.Dir(snap), 0o700); err != nil {
 		t.Fatal(err)
 	}

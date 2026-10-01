@@ -20,6 +20,7 @@ sql:
           trigger_source: Trigger
           github_login: GitHubLogin
           github_id: GitHubID
+          sha256: SHA256
           memory_mb: MemoryMB
           snapshot_db: SnapshotDB
         # Secrets are encrypted in the database (internal/secret).

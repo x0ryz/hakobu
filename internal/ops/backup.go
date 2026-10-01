@@ -1,6 +1,8 @@
 package ops
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -236,8 +238,9 @@ func backupAndCheck(s *store.Store, dbName string) error {
 	return nil
 }
 
-// BackupDatabase streams a gzipped pg_dump through a temporary file (an
-// upload needs its size up front) to R2, in parts of backupPartSize.
+// BackupDatabase streams a pg_dump through a temporary file (an upload
+// needs its size up front) to R2, in parts of backupPartSize, and records
+// the dump's SHA-256.
 func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	d, err := s.GetDatabase(ctx(), dbName)
 	if err != nil {
@@ -249,25 +252,57 @@ func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		return 0, err
 	}
-	f, err := os.CreateTemp(tmpDir, "backup-*.sql.gz")
+	f, err := os.CreateTemp(tmpDir, "backup-*.dump")
 	if err != nil {
 		return 0, err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if err := backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, f); err != nil {
+	sum := sha256.New()
+	if err := backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, io.MultiWriter(f, sum)); err != nil {
 		return 0, err
 	}
 	info, err := f.Stat()
 	if err != nil {
 		return 0, err
 	}
-	key := fmt.Sprintf("%s/%s.sql.gz", d.Name, time.Now().UTC().Format("20060102-150405"))
+	key := fmt.Sprintf("%s/%s.dump", d.Name, time.Now().UTC().Format("20060102-150405"))
 	parts, err := uploadParts(s, key, f, info.Size())
 	if err != nil {
 		return 0, err
 	}
-	return s.CreateBackup(ctx(), store.CreateBackupParams{Database: d.Name, ObjectKey: key, Parts: int64(parts), SizeBytes: info.Size()})
+	return s.CreateBackup(ctx(), store.CreateBackupParams{
+		Database: d.Name, ObjectKey: key, Parts: int64(parts), SizeBytes: info.Size(), SHA256: hex.EncodeToString(sum.Sum(nil)),
+	})
+}
+
+// fetchBackup downloads a backup into a temporary file and checks it
+// against the SHA-256 taken when it was made, so a dump changed in the
+// bucket is never restored. The caller closes and removes the file.
+func fetchBackup(s *store.Store, b store.Backup) (*os.File, error) {
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(tmpDir, "restore-*.dump")
+	if err != nil {
+		return nil, err
+	}
+	body := &partsReader{s: s, b: b}
+	defer body.Close()
+	sum := sha256.New()
+	_, err = io.Copy(io.MultiWriter(f, sum), body)
+	if err == nil && hex.EncodeToString(sum.Sum(nil)) != b.SHA256 {
+		err = fmt.Errorf("the backup in the bucket doesn't match the one hakobu made (SHA-256 differs), not restoring it")
+	}
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, err
+	}
+	return f, nil
 }
 
 // uploadParts uploads size bytes of r as key/000, key/001, ...
@@ -315,7 +350,11 @@ func verify(s *store.Store, b store.Backup) (tables int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	body := &partsReader{s: s, b: b}
+	body, err := fetchBackup(s, b)
+	if err != nil {
+		return 0, err
+	}
+	defer os.Remove(body.Name())
 	defer body.Close()
 
 	// Database names can't contain dots, so this never clashes with one.
@@ -341,14 +380,18 @@ func verify(s *store.Store, b store.Backup) (tables int, err error) {
 	return backup.CountTables(ctx(), PostgresContainer, d.User, scratch)
 }
 
-// restoreBackup replays a backup into its database. The dump is plain SQL,
-// so rows that already exist cause errors rather than being overwritten.
+// restoreBackup replays a backup into its database. Objects and rows that
+// already exist cause errors rather than being overwritten.
 func restoreBackup(s *store.Store, b store.Backup) error {
 	d, err := s.GetDatabase(ctx(), b.Database)
 	if err != nil {
 		return err
 	}
-	body := &partsReader{s: s, b: b}
+	body, err := fetchBackup(s, b)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(body.Name())
 	defer body.Close()
 	return backup.RestoreDatabase(ctx(), PostgresContainer, d.User, d.Name, body)
 }

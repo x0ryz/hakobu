@@ -102,6 +102,9 @@ CREATE TABLE backups (
 	object_key TEXT NOT NULL,
 	parts INTEGER NOT NULL,
 	size_bytes INTEGER NOT NULL DEFAULT 0,
+	-- of the whole dump, checked before it's restored: the bucket is
+	-- outside this server, and a restore runs whatever the dump says
+	sha256 TEXT NOT NULL,
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 	verified_at TEXT NOT NULL DEFAULT '',
 	verify_error TEXT NOT NULL DEFAULT '',

@@ -179,7 +179,7 @@ DELETE FROM storages WHERE name = ?;
 -- Backups
 
 -- name: CreateBackup :one
-INSERT INTO backups (database, object_key, parts, size_bytes) VALUES (?, ?, ?, ?) RETURNING id;
+INSERT INTO backups (database, object_key, parts, size_bytes, sha256) VALUES (?, ?, ?, ?, ?) RETURNING id;
 
 -- name: GetBackup :one
 SELECT * FROM backups WHERE id = ?;

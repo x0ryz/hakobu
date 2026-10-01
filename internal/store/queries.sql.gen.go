@@ -113,7 +113,7 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) error {
 
 const createBackup = `-- name: CreateBackup :one
 
-INSERT INTO backups (database, object_key, parts, size_bytes) VALUES (?, ?, ?, ?) RETURNING id
+INSERT INTO backups (database, object_key, parts, size_bytes, sha256) VALUES (?, ?, ?, ?, ?) RETURNING id
 `
 
 type CreateBackupParams struct {
@@ -121,6 +121,7 @@ type CreateBackupParams struct {
 	ObjectKey string
 	Parts     int64
 	SizeBytes int64
+	SHA256    string
 }
 
 // Backups
@@ -130,6 +131,7 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.ObjectKey,
 		arg.Parts,
 		arg.SizeBytes,
+		arg.SHA256,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -532,7 +534,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
@@ -544,6 +546,7 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 		&i.ObjectKey,
 		&i.Parts,
 		&i.SizeBytes,
+		&i.SHA256,
 		&i.CreatedAt,
 		&i.VerifiedAt,
 		&i.VerifyError,
@@ -712,7 +715,7 @@ func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKi
 }
 
 const listAllBackups = `-- name: ListAllBackups :many
-SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
 `
 
 func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup, error) {
@@ -730,6 +733,7 @@ func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup
 			&i.ObjectKey,
 			&i.Parts,
 			&i.SizeBytes,
+			&i.SHA256,
 			&i.CreatedAt,
 			&i.VerifiedAt,
 			&i.VerifyError,
@@ -964,7 +968,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, "database", object_key, parts, size_bytes, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -987,6 +991,7 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 			&i.ObjectKey,
 			&i.Parts,
 			&i.SizeBytes,
+			&i.SHA256,
 			&i.CreatedAt,
 			&i.VerifiedAt,
 			&i.VerifyError,

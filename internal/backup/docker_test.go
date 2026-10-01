@@ -34,7 +34,7 @@ func TestDockerBackup(t *testing.T) {
 	docker(t, "exec", pg, "psql", "-U", "app", "-d", "main", "-c", `CREATE TABLE a (n int); CREATE TABLE b (s text); INSERT INTO a SELECT generate_series(1, 1000)`)
 
 	// Dump through a file, restore elsewhere.
-	f, err := os.Create(filepath.Join(t.TempDir(), "dump.sql.gz"))
+	f, err := os.Create(filepath.Join(t.TempDir(), "main.dump"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,24 +53,28 @@ func TestDockerBackup(t *testing.T) {
 	if rows := docker(t, "exec", pg, "psql", "-U", "app", "-d", "copy", "-Atc", "SELECT count(*) FROM a"); rows != "1000" {
 		t.Errorf("restored %s rows", rows)
 	}
-	// A broken dump changes nothing and says why.
-	err = RestoreDatabase(ctx, pg, "app", "copy", gzipped("CREATE TABLE c (n int);\nSELECT nonsense;\n"))
-	if err == nil || !strings.Contains(err.Error(), "nonsense") {
-		t.Errorf("broken restore error = %v", err)
+	// A dump that fails halfway changes nothing and says why: this one
+	// creates c, then clashes with the a restored above.
+	docker(t, "exec", pg, "psql", "-U", "app", "-d", "main", "-c", `CREATE TABLE c (n int)`)
+	var clash bytes.Buffer
+	if err := DumpDatabase(ctx, pg, "app", "main", &clash); err != nil {
+		t.Fatal(err)
+	}
+	err = RestoreDatabase(ctx, pg, "app", "copy", &clash)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("clashing restore error = %v", err)
 	}
 	if n, _ := CountTables(ctx, pg, "app", "copy"); n != 2 {
 		t.Errorf("a failed restore left %d tables, want 2", n)
 	}
-}
-
-func gzipped(s string) io.Reader {
-	var b bytes.Buffer
-	cmd := exec.Command("gzip")
-	cmd.Stdin, cmd.Stdout = strings.NewReader(s), &b
-	if err := cmd.Run(); err != nil {
-		panic(err)
+	// psql meta-commands, which a plain SQL dump could carry, aren't run.
+	err = RestoreDatabase(ctx, pg, "app", "copy", strings.NewReader("\\! touch /tmp/pwned\n"))
+	if err == nil {
+		t.Error("a plain SQL script was restored")
 	}
-	return &b
+	if exec.Command("docker", "exec", pg, "test", "-e", "/tmp/pwned").Run() == nil {
+		t.Error("a meta-command in the dump ran a shell")
+	}
 }
 
 func waitFor(t *testing.T, ok func() bool) {

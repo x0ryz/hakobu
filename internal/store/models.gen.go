@@ -67,6 +67,7 @@ type Backup struct {
 	ObjectKey   string
 	Parts       int64
 	SizeBytes   int64
+	SHA256      string
 	CreatedAt   string
 	VerifiedAt  string
 	VerifyError string

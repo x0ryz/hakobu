@@ -22,12 +22,12 @@ import (
 
 const (
 	snapshotDir = "data/snapshots"
-	snapshotExt = ".sql.gz.enc"
+	snapshotExt = ".dump.enc"
 )
 
 func snapshotPath(app string) string { return filepath.Join(snapshotDir, app+snapshotExt) }
 
-// dumpTo writes a sealed, gzipped dump of d to a new file in snapshotDir.
+// dumpTo writes a sealed dump of d to a new file in snapshotDir.
 func dumpTo(d store.Database) (path string, err error) {
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return "", err
