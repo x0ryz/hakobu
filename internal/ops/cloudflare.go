@@ -176,7 +176,7 @@ func SetupTunnel(s *store.Store, zoneID, sub string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	recordID, err := c.RouteHost(zone.ID, host, tunnelID)
+	recordID, err := c.RouteHost(zone.Account.ID, zone.ID, host, tunnelID)
 	if err != nil {
 		return "", err
 	}
@@ -223,7 +223,7 @@ func SetAppDomain(s *store.Store, app store.App, domain string) error {
 		if !ok {
 			return fmt.Errorf("%s is not in a domain of your Cloudflare account", domain)
 		}
-		if params.DnsRecordID, err = c.RouteHost(zone.ID, domain, cf.TunnelID); err != nil {
+		if params.DnsRecordID, err = c.RouteHost(cf.AccountID, zone.ID, domain, cf.TunnelID); err != nil {
 			return err
 		}
 		params.DnsZoneID = zone.ID

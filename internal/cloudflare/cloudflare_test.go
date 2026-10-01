@@ -88,27 +88,49 @@ func TestZoneFor(t *testing.T) {
 	}
 }
 
-func TestRouteHostUpsert(t *testing.T) {
-	var calls []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
-		if r.Method == "GET" {
-			fmt.Fprint(w, `{"success":true,"errors":[],"result":[{"id":"rec1","comment":"managed by hakobu"}]}`)
-			return
-		}
-		fmt.Fprint(w, `{"success":true,"errors":[],"result":{"id":"rec1"}}`)
-	}))
-	defer srv.Close()
-	old := APIURL
-	APIURL = srv.URL
-	defer func() { APIURL = old }()
-
-	id, err := Client{Token: "t"}.RouteHost("zone1", "hakobu.example.com", "tun9")
-	if err != nil || id != "rec1" {
-		t.Fatalf("id %q, err %v", id, err)
+func TestRouteHost(t *testing.T) {
+	const hk = `"comment":"managed by hakobu"`
+	cases := []struct {
+		name, records, tunnel string // the record GET's result, the other tunnel's GET answer
+		wantCall, wantErr     string // the write expected, or the refusal
+	}{
+		{"new", `[]`, "", "POST /zones/z/dns_records", ""},
+		{"already ours", `[{"id":"r1","type":"CNAME","content":"mine.cfargotunnel.com",` + hk + `}]`, "", "", ""},
+		{"left by a dead tunnel", `[{"id":"r1","type":"CNAME","content":"old.cfargotunnel.com",` + hk + `}]`,
+			`{"success":true,"errors":[],"result":{"name":"hakobu-old","status":"inactive"}}`, "PUT /zones/z/dns_records/r1", ""},
+		{"tunnel deleted", `[{"id":"r1","type":"CNAME","content":"old.cfargotunnel.com",` + hk + `}]`,
+			`{"success":false,"errors":[{"message":"Tunnel not found"}]}`, "PUT /zones/z/dns_records/r1", ""},
+		{"another running hakobu", `[{"id":"r1","type":"CNAME","content":"live.cfargotunnel.com",` + hk + `}]`,
+			`{"success":true,"errors":[],"result":{"name":"hakobu-laptop","status":"healthy"}}`, "", "running tunnel hakobu-laptop"},
+		{"someone else's", `[{"id":"r1","type":"A","content":"1.2.3.4","comment":""}]`, "", "", "didn't create"},
 	}
-	if len(calls) != 2 || !strings.HasPrefix(calls[0], "GET /zones/zone1/dns_records?") || !strings.HasPrefix(calls[1], "PUT /zones/zone1/dns_records/rec1?") {
-		t.Fatalf("calls %v", calls)
+	for _, c := range cases {
+		var writes []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/zones/"):
+				fmt.Fprintf(w, `{"success":true,"errors":[],"result":%s}`, c.records)
+			case r.Method == "GET":
+				fmt.Fprint(w, c.tunnel)
+			default:
+				writes = append(writes, r.Method+" "+r.URL.Path)
+				fmt.Fprint(w, `{"success":true,"errors":[],"result":{"id":"r9"}}`)
+			}
+		}))
+		old := APIURL
+		APIURL = srv.URL
+		_, err := Client{Token: "t"}.RouteHost("acc", "z", "hakobu.example.com", "mine")
+		APIURL = old
+		srv.Close()
+		if c.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) || len(writes) > 0 {
+				t.Errorf("%s: err %v, writes %v; want refusal %q and no writes", c.name, err, writes, c.wantErr)
+			}
+			continue
+		}
+		if err != nil || (c.wantCall == "" && len(writes) > 0) || (c.wantCall != "" && (len(writes) != 1 || writes[0] != c.wantCall)) {
+			t.Errorf("%s: err %v, writes %v, want %q", c.name, err, writes, c.wantCall)
+		}
 	}
 }
 

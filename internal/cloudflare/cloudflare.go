@@ -199,43 +199,72 @@ func (c Client) SetIngress(accountID, tunnelID string, rules []IngressRule) erro
 }
 
 // RouteHost points host at the tunnel with a proxied CNAME and returns the
-// record ID. A record hakobu created before (a retried setup) is moved to
-// the new tunnel; someone else's record is left alone with an error.
-func (c Client) RouteHost(zoneID, host, tunnelID string) (string, error) {
+// record ID. Every hakobu marks its records the same way, so a record that
+// leads to another tunnel is taken over only when that tunnel is gone or
+// has no connection: it may belong to another hakobu that is running. A
+// record hakobu didn't create is never touched.
+func (c Client) RouteHost(accountID, zoneID, host, tunnelID string) (string, error) {
+	target := tunnelID + ".cfargotunnel.com"
 	var existing []struct {
 		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Content string `json:"content"`
 		Comment string `json:"comment"`
 	}
 	if err := c.call("GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(host), nil, &existing); err != nil {
 		return "", err
 	}
 	for _, r := range existing {
-		if r.Comment != "managed by hakobu" {
+		if r.Comment != hakobuRecord || r.Type != "CNAME" || !strings.HasSuffix(r.Content, ".cfargotunnel.com") {
 			return "", fmt.Errorf("%s: a DNS record that hakobu didn't create already exists (remove it in Cloudflare first)", host)
 		}
 	}
-	if len(existing) > 0 {
-		var rec struct {
-			ID string `json:"id"`
+	if len(existing) > 1 {
+		return "", fmt.Errorf("%s has %d DNS records; remove the extra ones in Cloudflare first", host, len(existing))
+	}
+	body := map[string]any{"type": "CNAME", "name": host, "content": target, "proxied": true, "comment": hakobuRecord}
+	var rec struct {
+		ID string `json:"id"`
+	}
+	if len(existing) == 1 {
+		r := existing[0]
+		if r.Content == target {
+			return r.ID, nil
 		}
-		err := c.call("PUT", "/zones/"+zoneID+"/dns_records/"+existing[0].ID, map[string]any{
-			"type": "CNAME", "name": host, "content": tunnelID + ".cfargotunnel.com", "proxied": true, "comment": "managed by hakobu",
-		}, &rec)
-		if err != nil {
+		other := strings.TrimSuffix(r.Content, ".cfargotunnel.com")
+		if name, alive, err := c.tunnelAlive(accountID, other); err != nil {
+			return "", fmt.Errorf("%s: %w", host, err)
+		} else if alive {
+			return "", fmt.Errorf("%s is in use by the running tunnel %s (another hakobu?); pick another name or stop that one first", host, name)
+		}
+		if err := c.call("PUT", "/zones/"+zoneID+"/dns_records/"+r.ID, body, &rec); err != nil {
 			return "", fmt.Errorf("%s: %w", host, err)
 		}
 		return rec.ID, nil
 	}
-	var rec struct {
-		ID string `json:"id"`
-	}
-	err := c.call("POST", "/zones/"+zoneID+"/dns_records", map[string]any{
-		"type": "CNAME", "name": host, "content": tunnelID + ".cfargotunnel.com", "proxied": true, "comment": "managed by hakobu",
-	}, &rec)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w (remove the existing DNS record for it in Cloudflare first)", host, err)
+	if err := c.call("POST", "/zones/"+zoneID+"/dns_records", body, &rec); err != nil {
+		return "", fmt.Errorf("%s: %w", host, err)
 	}
 	return rec.ID, nil
+}
+
+const hakobuRecord = "managed by hakobu"
+
+// tunnelAlive reports whether the tunnel exists and has a connection; a
+// deleted or unknown tunnel isn't alive.
+func (c Client) tunnelAlive(accountID, tunnelID string) (name string, alive bool, err error) {
+	var t struct {
+		Name      string  `json:"name"`
+		Status    string  `json:"status"`
+		DeletedAt *string `json:"deleted_at"`
+	}
+	if err := c.call("GET", "/accounts/"+accountID+"/cfd_tunnel/"+url.PathEscape(tunnelID), nil, &t); err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Not Found") {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return t.Name, t.DeletedAt == nil && (t.Status == "healthy" || t.Status == "degraded"), nil
 }
 
 func (c Client) DeleteRecord(zoneID, recordID string) error {
