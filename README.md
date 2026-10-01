@@ -57,6 +57,24 @@ Every app then gets its own address in any domain of the account (`app.example.c
 Lost the setup link: `journalctl -u hakobu | grep setup`. Give hakobu a new Cloudflare
 token (after rolling it, say): `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
 
+### Bringing a panel back on a new server
+
+With backups on, the panel's own database goes to the backup bucket daily, sealed with the
+master key. The key stays off the bucket: download it from **Settings → Security →
+Download master key** (it asks you to sign in with GitHub again) and keep the file away
+from the server; download it again after **Replace all secrets**. On a new server:
+
+```sh
+curl -fsSL https://hakobu.dev/install.sh -o install.sh
+sudo HAKOBU_RESTORE=hakobu-master-key-hakobu.example.com.txt bash install.sh
+```
+
+It asks for a Cloudflare API token that can read R2 (or takes `CLOUDFLARE_API_TOKEN`),
+restores the newest panel backup and starts the panel on its old address, with its tunnel,
+GitHub App, projects and owner. Then redeploy the apps and restore each database from its
+backup page; files in volumes and RustFS storages stay with the old server. If the old
+Cloudflare token was rolled since, run `setup --reconnect` as above.
+
 Hakobu runs as the unprivileged `hakobu` user, and
 [rootless Docker](https://docs.docker.com/engine/security/rootless/) as another one,
 `hakobu-docker`: neither a break-in into hakobu nor a container escape gets root on the

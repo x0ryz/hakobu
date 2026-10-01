@@ -135,6 +135,7 @@ CREATE TABLE owner (
 CREATE TABLE sessions (
 	id TEXT PRIMARY KEY,
 	github_id INTEGER NOT NULL,
+	signed_in_at TEXT NOT NULL,
 	expires_at TEXT NOT NULL
 );
 

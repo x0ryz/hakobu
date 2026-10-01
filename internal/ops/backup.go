@@ -76,23 +76,31 @@ func partKey(b string, i int) string { return fmt.Sprintf("%s/%03d", b, i) }
 
 // partsReader reads a backup's parts one after another as one stream.
 type partsReader struct {
-	s       *store.Store
-	b       store.Backup
+	parts   int
+	open    func(part int) (io.ReadCloser, error)
 	next    int
 	current io.ReadCloser
+}
+
+// backupParts reads a database backup from the backup bucket.
+func backupParts(s *store.Store, b store.Backup) *partsReader {
+	return &partsReader{parts: int(b.Parts), open: func(i int) (io.ReadCloser, error) {
+		c, acc, bucket, err := r2(s) // per part: a long download can outlive a token
+		if err != nil {
+			return nil, err
+		}
+		return c.GetObject(acc, bucket, partKey(b.ObjectKey, i))
+	}}
 }
 
 func (r *partsReader) Read(p []byte) (int, error) {
 	for {
 		if r.current == nil {
-			if r.next == int(r.b.Parts) {
+			if r.next == r.parts {
 				return 0, io.EOF
 			}
-			c, acc, bucket, err := r2(r.s)
-			if err != nil {
-				return 0, err
-			}
-			if r.current, err = c.GetObject(acc, bucket, partKey(r.b.ObjectKey, r.next)); err != nil {
+			var err error
+			if r.current, err = r.open(r.next); err != nil {
 				return 0, err
 			}
 			r.next++
@@ -287,7 +295,7 @@ func fetchBackup(s *store.Store, b store.Backup) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	body := &partsReader{s: s, b: b}
+	body := backupParts(s, b)
 	defer body.Close()
 	sum := sha256.New()
 	_, err = io.Copy(io.MultiWriter(f, sum), body)
@@ -393,6 +401,9 @@ func restoreBackup(s *store.Store, b store.Backup) error {
 	}
 	defer os.Remove(body.Name())
 	defer body.Close()
+	if err := ensureInPostgres(s, d); err != nil {
+		return err
+	}
 	return backup.RestoreDatabase(ctx(), PostgresContainer, d.User, d.Name, body)
 }
 

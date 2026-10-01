@@ -192,17 +192,23 @@ func (q *Queries) CreateProject(ctx context.Context, name string) error {
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (id, github_id, expires_at) VALUES (?, ?, ?)
+INSERT INTO sessions (id, github_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?)
 `
 
 type CreateSessionParams struct {
-	ID        string
-	GitHubID  int64
-	ExpiresAt string
+	ID         string
+	GitHubID   int64
+	SignedInAt string
+	ExpiresAt  string
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
-	_, err := q.db.ExecContext(ctx, createSession, arg.ID, arg.GitHubID, arg.ExpiresAt)
+	_, err := q.db.ExecContext(ctx, createSession,
+		arg.ID,
+		arg.GitHubID,
+		arg.SignedInAt,
+		arg.ExpiresAt,
+	)
 	return err
 }
 
@@ -651,13 +657,18 @@ func (q *Queries) GetProjectByID(ctx context.Context, id int64) (Project, error)
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT id, github_id, expires_at FROM sessions WHERE id = ?
+SELECT id, github_id, signed_in_at, expires_at FROM sessions WHERE id = ?
 `
 
 func (q *Queries) GetSessionRow(ctx context.Context, id string) (Session, error) {
 	row := q.db.QueryRowContext(ctx, getSessionRow, id)
 	var i Session
-	err := row.Scan(&i.ID, &i.GitHubID, &i.ExpiresAt)
+	err := row.Scan(
+		&i.ID,
+		&i.GitHubID,
+		&i.SignedInAt,
+		&i.ExpiresAt,
+	)
 	return i, err
 }
 

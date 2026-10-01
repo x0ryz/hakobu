@@ -548,7 +548,7 @@ func TestDockerRotateSecrets(t *testing.T) {
 	if !strings.Contains(env["DATABASE_URL"], string(dbAfter.Password)) || env["S3_ACCESS_KEY_ID"] != stAfter.AccessKeyID || env["SEALED"] != "shh" {
 		t.Errorf("the app runs with old values: DATABASE_URL=%q S3_ACCESS_KEY_ID=%q", env["DATABASE_URL"], env["S3_ACCESS_KEY_ID"])
 	}
-	if _, err := s.SessionUser(ctx(), "tok"); err == nil {
+	if _, _, err := s.SessionUser(ctx(), "tok"); err == nil {
 		t.Error("sessions survived")
 	}
 	if keyAfter, _ := os.ReadFile("master.key"); string(keyAfter) == string(keyBefore) {
@@ -611,4 +611,58 @@ func TestDockerProjectIsolation(t *testing.T) {
 	if err := DeleteProject(s, a.ProjectName); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestDockerRestoreOnNewServer restores a database backup into a Postgres
+// that has never seen the database, as after the panel was restored on a
+// new server: the role and database are made first.
+func TestDockerRestoreOnNewServer(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	fakeR2(t)
+	suffix, _ := RandomHex(3)
+	old := PostgresContainer
+	PostgresContainer = "zt-pg-" + suffix
+	t.Cleanup(func() {
+		_ = deploy.RemoveContainer(ctx(), PostgresContainer)
+		_ = deploy.RemoveVolume(ctx(), PostgresContainer+"_data")
+		PostgresContainer = old
+	})
+	dir := t.TempDir()
+	t.Chdir(dir) // data/tmp
+	s, err := store.Open(filepath.Join(dir, "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(s.SaveCloudflareToken(ctx(), "tok"))
+	must(s.SaveCloudflareTunnel(ctx(), store.SaveCloudflareTunnelParams{AccountID: "acc", TunnelID: "t"}))
+	must(SetupBackups(s))
+	project := "zt" + suffix
+	must(CreateProject(s, project))
+	t.Cleanup(func() { _ = removeProjectNetworks(project) })
+	must(CreateDatabase(s, project, "zt"+suffix))
+	d, _ := s.GetDatabase(ctx(), "zt"+suffix)
+	dockerOut(t, "exec", PostgresContainer, "psql", "-U", d.User, "-d", d.Name, "-c", "CREATE TABLE t (n int); INSERT INTO t VALUES (7)")
+	id, err := BackupDatabase(s, d.Name)
+	must(err)
+
+	// The new server's Postgres: nothing of this database or its role.
+	must(deploy.PostgresExec(ctx(), PostgresContainer, `DROP DATABASE "`+d.Name+`" WITH (FORCE)`))
+	must(deploy.PostgresExec(ctx(), PostgresContainer, `DROP USER "`+d.User+`"`))
+	b, err := s.GetBackup(ctx(), id)
+	must(err)
+	must(restoreBackup(s, b))
+	if n := dockerOut(t, "exec", PostgresContainer, "psql", "-U", d.User, "-d", d.Name, "-Atc", "SELECT n FROM t"); n != "7" {
+		t.Errorf("restored row = %q", n)
+	}
+	// The recreated role logs in with the password apps were given.
+	dockerOut(t, "exec", "-e", "PGPASSWORD="+string(d.Password), PostgresContainer, "psql", "-h", "127.0.0.1", "-U", d.User, "-d", d.Name, "-c", "SELECT 1")
+	must(DeleteDatabase(s, d.Name))
 }

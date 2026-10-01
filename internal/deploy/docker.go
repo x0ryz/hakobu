@@ -477,6 +477,19 @@ func PostgresReady(ctx context.Context, containerName string) bool {
 	return err == nil && exitCode == 0
 }
 
+// PostgresHasDatabase reports whether the server has a database named name.
+func PostgresHasDatabase(ctx context.Context, containerName, name string) (bool, error) {
+	out, exitCode, err := execInContainer(ctx, containerName, []string{"psql", "-U", "postgres", "-Atc",
+		"SELECT 1 FROM pg_database WHERE datname = '" + strings.ReplaceAll(name, "'", "''") + "'"})
+	if err != nil {
+		return false, err
+	}
+	if exitCode != 0 {
+		return false, fmt.Errorf("psql exited %d: %s", exitCode, strings.TrimSpace(out))
+	}
+	return strings.TrimSpace(out) == "1", nil
+}
+
 // PostgresExec runs one SQL statement as the postgres superuser (local trust auth).
 func PostgresExec(ctx context.Context, containerName, sql string) error {
 	out, exitCode, err := execInContainer(ctx, containerName, []string{"psql", "-U", "postgres", "-c", sql})

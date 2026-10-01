@@ -89,18 +89,43 @@ func CreateDatabase(s *store.Store, projectName, name string) error {
 	if err != nil {
 		return err
 	}
-	user := name + "_user"
+	d := store.Database{Name: name, User: name + "_user", Password: secret.String(password)}
+	if err := createInPostgres(d); err != nil {
+		return err
+	}
+	return s.CreateDatabase(ctx(), store.CreateDatabaseParams{ProjectID: p.ID, Name: d.Name, User: d.User, Password: d.Password})
+}
+
+func createInPostgres(d store.Database) error {
 	for _, sql := range []string{
-		fmt.Sprintf(`CREATE USER "%s" WITH PASSWORD '%s'`, user, password),
-		fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, name, user),
+		fmt.Sprintf(`CREATE USER "%s" WITH PASSWORD '%s'`, d.User, string(d.Password)),
+		fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, d.Name, d.User),
 		// New databases are connectable by PUBLIC; keep other projects' roles out.
-		fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, name),
+		fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, d.Name),
 	} {
 		if err := deploy.PostgresExec(ctx(), PostgresContainer, sql); err != nil {
 			return err
 		}
 	}
-	return s.CreateDatabase(ctx(), store.CreateDatabaseParams{ProjectID: p.ID, Name: name, User: user, Password: secret.String(password)})
+	return nil
+}
+
+// ensureInPostgres creates d, empty, with its role if Postgres lacks it, as
+// on a new server the panel was restored to.
+func ensureInPostgres(s *store.Store, d store.Database) error {
+	if err := ensurePostgres(); err != nil {
+		return fmt.Errorf("failed to start postgres: %w", err)
+	}
+	if p, err := s.GetProjectByID(ctx(), d.ProjectID); err == nil {
+		if err := ensureProjectNetworks(p.Name); err != nil {
+			return err
+		}
+	}
+	exists, err := deploy.PostgresHasDatabase(ctx(), PostgresContainer, d.Name)
+	if err != nil || exists {
+		return err
+	}
+	return createInPostgres(d)
 }
 
 func DeleteDatabase(s *store.Store, name string) error {

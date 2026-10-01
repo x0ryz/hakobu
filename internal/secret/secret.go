@@ -14,8 +14,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql/driver"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -284,4 +286,41 @@ func (s *String) Scan(src any) error {
 	plain, err := Decrypt(stored)
 	*s = String(plain)
 	return err
+}
+
+// ExportKey returns the key secrets are encrypted with now, base64-encoded,
+// for the owner to keep: the panel's backups can't be read without it.
+func ExportKey() (string, error) {
+	ks, err := loadedKeys()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(ks[0].raw), nil
+}
+
+// Fingerprint names the key secrets are encrypted with now, without
+// revealing it; "" if none is loaded.
+func Fingerprint() string {
+	ks, err := loadedKeys()
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(ks[0].raw)
+	return hex.EncodeToString(sum[:8])
+}
+
+// ImportKey saves a key from ExportKey to path, which must not hold one
+// yet, as when a panel is restored on a new server.
+func ImportKey(path, encoded string) error {
+	k, err := decodeKey(strings.TrimSpace(encoded), "the master key")
+	if err != nil {
+		return err
+	}
+	if err := writeKey(path, k); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s already holds a master key; move it away to restore with another", path)
+		}
+		return err
+	}
+	return nil
 }

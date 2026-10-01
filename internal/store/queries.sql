@@ -221,7 +221,7 @@ INSERT INTO owner (id, github_id, github_login) VALUES (1, ?, ?);
 UPDATE owner SET github_login = ? WHERE id = 1;
 
 -- name: CreateSession :exec
-INSERT INTO sessions (id, github_id, expires_at) VALUES (?, ?, ?);
+INSERT INTO sessions (id, github_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?);
 
 -- name: GetSessionRow :one
 SELECT * FROM sessions WHERE id = ?;

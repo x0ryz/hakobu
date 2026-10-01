@@ -15,7 +15,9 @@
 # Optional: CLOUDFLARE_API_TOKEN (skips the token prompt),
 #           HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
 #           HAKOBU_BINARY (install this local binary instead of downloading one),
-#           HAKOBU_FROM_SOURCE=1 (build the main branch instead of a release)
+#           HAKOBU_FROM_SOURCE=1 (build the main branch instead of a release),
+#           HAKOBU_RESTORE=<key file> (bring back a panel from its backup, with the
+#             key file from its Settings, instead of setting up a new one)
 set -euo pipefail
 
 HAKOBU_REPO="${HAKOBU_REPO:-x0ryz/hakobu}"
@@ -251,6 +253,21 @@ else
   rm -rf "$SRC"
 fi
 chmod +x /opt/hakobu/hakobu
+
+if [ -n "${HAKOBU_RESTORE:-}" ]; then
+  echo "==> restoring the panel from its backup"
+  [ -r "$HAKOBU_RESTORE" ] || { echo "can't read the key file $HAKOBU_RESTORE"; exit 1; }
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    read -rsp "Cloudflare API token that can read R2 (it isn't echoed): " CLOUDFLARE_API_TOKEN < /dev/tty
+    echo
+  fi
+  # The key file goes in on stdin: hakobu needn't be able to read where it is.
+  if [ -n "$ROOTFUL" ]; then
+    (cd /opt/hakobu && CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" ./hakobu restore --key -) < "$HAKOBU_RESTORE"
+  else
+    (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" ./hakobu restore --key -) < "$HAKOBU_RESTORE"
+  fi
+fi
 
 echo "==> connecting Cloudflare"
 # stdin is the script itself under curl | bash, so setup talks to the terminal.

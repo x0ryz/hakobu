@@ -91,10 +91,10 @@ func TestStore(t *testing.T) {
 	if err := s.NewSession(ctx, "old", 42, -time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := s.SessionUser(ctx, "live"); err != nil || id != 42 {
-		t.Errorf("live session = %d, %v", id, err)
+	if id, at, err := s.SessionUser(ctx, "live"); err != nil || id != 42 || time.Since(at) > time.Minute {
+		t.Errorf("live session = %d signed in at %v, %v", id, at, err)
 	}
-	if _, err := s.SessionUser(ctx, "old"); err == nil {
+	if _, _, err := s.SessionUser(ctx, "old"); err == nil {
 		t.Error("expired session accepted")
 	}
 	if err := s.PruneOldData(ctx, 7); err != nil {
@@ -156,7 +156,7 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 	if err := s.NewSession(ctx, "tok", 42, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := s.SessionUser(ctx, "tok"); err != nil || id != 42 {
+	if id, _, err := s.SessionUser(ctx, "tok"); err != nil || id != 42 {
 		t.Errorf("session = %d, %v", id, err)
 	}
 	var stored string

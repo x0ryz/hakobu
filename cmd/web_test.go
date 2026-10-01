@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/detect"
 	"github.com/x0ryz/hakobu/internal/ops"
@@ -151,5 +154,54 @@ func TestStaticFiles(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/static/fonts/inter.woff2", nil))
 	if w.Code != http.StatusOK {
 		t.Errorf("font: %d", w.Code)
+	}
+}
+
+func TestMasterKeyNeedsFreshSignIn(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := config.PrepareDataDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetPublicHost("hakobu.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(config.DatabaseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.SetOwner(ctx, store.SetOwnerParams{GitHubID: 42, GitHubLogin: "me"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.NewSession(ctx, "tok", 42, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	registerWebRoutes(mux, s)
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "https://hakobu.example.com/settings/master-key", nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tok"})
+		w := httptest.NewRecorder()
+		panelHandler(mux).ServeHTTP(w, r)
+		return w
+	}
+
+	keyFreshFor = -time.Second // signed in too long ago
+	t.Cleanup(func() { keyFreshFor = 5 * time.Minute })
+	w := get()
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/auth/login" || !strings.Contains(w.Header().Get("Set-Cookie"), afterCookie+"=master-key") {
+		t.Errorf("stale session: %d %v, body %q", w.Code, w.Header(), w.Body)
+	}
+	if ops.KeyDownloaded() {
+		t.Error("key counted as downloaded")
+	}
+
+	keyFreshFor = time.Hour
+	w = get()
+	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(w.Body.String(), "HAKOBU_MASTER_KEY=") {
+		t.Errorf("fresh session: %d %v, body %q", w.Code, w.Header(), w.Body)
+	}
+	if !ops.KeyDownloaded() {
+		t.Error("download not noted")
 	}
 }

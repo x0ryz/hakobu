@@ -166,6 +166,13 @@ func (s *Store) rewrapSealedFiles() {
 	}
 }
 
+// SnapshotTo writes a consistent copy of the database to path, which must
+// not exist, while it stays in use.
+func (s *Store) SnapshotTo(path string) error {
+	_, err := s.db.Exec(`VACUUM INTO ?`, path)
+	return err
+}
+
 func (a App) ContainerName() string {
 	slot := a.ActiveSlot
 	if slot == "" {
@@ -233,21 +240,23 @@ func sessionID(token string) string {
 }
 
 func (s *Store) NewSession(ctx context.Context, token string, githubID int64, ttl time.Duration) error {
-	return s.CreateSession(ctx, CreateSessionParams{ID: sessionID(token), GitHubID: githubID, ExpiresAt: timestamp(time.Now().Add(ttl))})
+	now := time.Now()
+	return s.CreateSession(ctx, CreateSessionParams{ID: sessionID(token), GitHubID: githubID, SignedInAt: timestamp(now), ExpiresAt: timestamp(now.Add(ttl))})
 }
 
-// SessionUser returns the GitHub user ID of the session's account; expired
-// sessions are deleted.
-func (s *Store) SessionUser(ctx context.Context, token string) (int64, error) {
+// SessionUser returns the GitHub user ID of the session's account and when
+// it signed in; expired sessions are deleted.
+func (s *Store) SessionUser(ctx context.Context, token string) (githubID int64, signedIn time.Time, err error) {
 	sess, err := s.GetSessionRow(ctx, sessionID(token))
 	if err != nil {
-		return 0, err
+		return 0, time.Time{}, err
 	}
 	if sess.ExpiresAt < timestamp(time.Now()) {
 		_ = s.DeleteSession(ctx, sess.ID) // PruneOldData removes it otherwise
-		return 0, fmt.Errorf("session expired")
+		return 0, time.Time{}, fmt.Errorf("session expired")
 	}
-	return sess.GitHubID, nil
+	signedIn, err = time.Parse("2006-01-02T15:04:05Z", sess.SignedInAt)
+	return sess.GitHubID, signedIn, err
 }
 
 func (s *Store) EndSession(ctx context.Context, token string) error {

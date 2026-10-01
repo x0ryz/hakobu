@@ -131,9 +131,10 @@ type SealedVar struct {
 }
 
 type Session struct {
-	ID        string
-	GitHubID  int64
-	ExpiresAt string
+	ID         string
+	GitHubID   int64
+	SignedInAt string
+	ExpiresAt  string
 }
 
 type Storage struct {

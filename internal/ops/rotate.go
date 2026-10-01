@@ -165,6 +165,11 @@ func rotateSecrets(s *store.Store, out io.Writer) (manual []string, failures int
 
 	step("everyone signed out", s.DeleteAllSessions(ctx()))
 	step("master key rotated (copies of the old key and database are worthless)", s.RotateMasterKey())
+	if BackupBucket(s) != "" {
+		// Older panel backups need the old key; this one is the first a
+		// newly downloaded key file restores.
+		step("panel backed up with the new key", BackupPanel(s))
+	}
 	return manual, failures
 }
 

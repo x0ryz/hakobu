@@ -3,6 +3,7 @@ package ops
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,6 +124,20 @@ func fakeR2(t *testing.T) (objects map[string][]byte, lock *string) {
 			}
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"success":false,"errors":[{"code":10007,"message":"not found"}]}`)
+		case r.Method == "GET" && strings.HasSuffix(path, "/objects"):
+			var keys []string
+			for k := range objects {
+				if strings.HasPrefix(k, r.URL.Query().Get("prefix")) {
+					keys = append(keys, k)
+				}
+			}
+			slices.Sort(keys)
+			var result []map[string]string
+			for _, k := range keys {
+				result = append(result, map[string]string{"key": k})
+			}
+			b, _ := json.Marshal(map[string]any{"success": true, "result": result, "result_info": map[string]any{"is_truncated": false}})
+			_, _ = w.Write(b)
 		case isObject && r.Method == "DELETE":
 			delete(objects, key)
 			fmt.Fprint(w, ok)
@@ -171,7 +186,7 @@ func TestR2Backups(t *testing.T) {
 		t.Fatalf("parts = %d, %v, objects %v", parts, err, objects)
 	}
 	b := store.Backup{ObjectKey: "main/1.sql.gz", Parts: int64(parts)}
-	got, err := io.ReadAll(&partsReader{s: s, b: b})
+	got, err := io.ReadAll(backupParts(s, b))
 	if err != nil || string(got) != dump {
 		t.Errorf("read back %q, %v", got, err)
 	}

@@ -1,6 +1,7 @@
 package cloudflare
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,4 +69,45 @@ func (c Client) GetObject(accountID, bucket, key string) (io.ReadCloser, error) 
 
 func (c Client) DeleteObject(accountID, bucket, key string) error {
 	return c.call("DELETE", objectPath(accountID, bucket, key), nil, nil)
+}
+
+// ListObjects returns the keys of every object whose key starts with
+// prefix, in lexicographic order.
+func (c Client) ListObjects(accountID, bucket, prefix string) ([]string, error) {
+	var keys []string
+	cursor := ""
+	for {
+		q := url.Values{"prefix": {prefix}, "per_page": {"1000"}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		path := r2Path(accountID, bucket) + "/objects?" + q.Encode()
+		resp, err := c.do("GET", path, "application/json", nil, -1)
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Result []struct {
+				Key string `json:"key"`
+			} `json:"result"`
+			ResultInfo struct {
+				Cursor      string `json:"cursor"`
+				IsTruncated bool   `json:"is_truncated"`
+			} `json:"result_info"`
+		}
+		raw, err := readEnvelope("GET", path, resp)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, err
+		}
+		for _, o := range page.Result {
+			keys = append(keys, o.Key)
+		}
+		if !page.ResultInfo.IsTruncated || page.ResultInfo.Cursor == "" || len(page.Result) == 0 {
+			return keys, nil
+		}
+		cursor = page.ResultInfo.Cursor
+	}
 }

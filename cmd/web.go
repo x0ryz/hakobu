@@ -77,8 +77,17 @@ const (
 	setupCookie      = "__Host-hakobu_setup"
 	manifestCookie   = "__Host-hakobu_gh_state"
 	oauthStateCookie = "__Host-hakobu_oauth_state"
+	afterCookie      = "__Host-hakobu_after" // where to go after signing in
 	sessionTTL       = 30 * 24 * time.Hour
 )
+
+// keyFreshFor is how soon after signing in the master key can be
+// downloaded; tests change it.
+var keyFreshFor = 5 * time.Minute
+
+// signedInKey holds, in an authed request's context, when its session
+// signed in.
+type signedInKey struct{}
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
@@ -145,9 +154,9 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			// The session's account is checked against the owner on every
 			// request, so a change of owner takes effect at once.
 			if c, err := r.Cookie(sessionCookie); err == nil {
-				if id, err := s.SessionUser(r.Context(), c.Value); err == nil {
+				if id, signedIn, err := s.SessionUser(r.Context(), c.Value); err == nil {
 					if mayAccess(r.Context(), s, id) {
-						h(w, r)
+						h(w, r.WithContext(context.WithValue(r.Context(), signedInKey{}, signedIn)))
 						return
 					}
 					if err := s.EndSession(r.Context(), c.Value); err != nil {
@@ -545,7 +554,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"PublicHost": config.PublicHost(), "Owner": owner.GitHubLogin,
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
-			"Rotation": ops.LastRotation(),
+			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
 		}
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
@@ -563,6 +572,34 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 
 	action("POST /settings/rotate-secrets", func(r *http.Request) (string, error) {
 		return "", ops.StartRotation(s)
+	})
+
+	// The master key opens every secret and backup, so it's handed out only
+	// right after a GitHub sign-in, not to whoever finds a session open.
+	handle("GET /settings/master-key", func(w http.ResponseWriter, r *http.Request) {
+		if signedIn, _ := r.Context().Value(signedInKey{}).(time.Time); time.Since(signedIn) > keyFreshFor {
+			setCookie(w, afterCookie, "master-key", 600)
+			http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+			return
+		}
+		kf, err := ops.CurrentKeyFile(s)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if err := ops.MarkKeyDownloaded(); err != nil {
+			fmt.Println("failed to note the key download:", err)
+		}
+		host := strings.Map(func(r rune) rune {
+			if r == '.' || r == '-' || ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+				return r
+			}
+			return -1
+		}, strings.ToLower(config.PublicHost()))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="hakobu-master-key-`+host+`.txt"`)
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(kf.Marshal())
 	})
 }
 
@@ -646,7 +683,10 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		state, _ := ops.RandomHex(16)
 		setCookie(w, oauthStateCookie, state, 600)
-		http.Redirect(w, r, github.AuthorizeURL(app.ClientID, "https://"+config.PublicHost()+"/auth/callback", state), http.StatusSeeOther)
+		// Signing in again for the master key shows GitHub's account picker
+		// instead of passing straight through.
+		reauth := cookieMatches(r, afterCookie, "master-key")
+		http.Redirect(w, r, github.AuthorizeURL(app.ClientID, "https://"+config.PublicHost()+"/auth/callback", state, reauth), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("GET /auth/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -705,7 +745,12 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			return
 		}
 		setCookie(w, sessionCookie, id, int(sessionTTL.Seconds()))
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		next := "/"
+		if cookieMatches(r, afterCookie, "master-key") {
+			setCookie(w, afterCookie, "", -1)
+			next = "/settings/master-key"
+		}
+		http.Redirect(w, r, next, http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {

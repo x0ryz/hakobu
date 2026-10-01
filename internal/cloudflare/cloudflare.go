@@ -111,27 +111,42 @@ func (c Client) do(method, path, contentType string, body io.Reader, size int64)
 
 // decode reads the API's JSON envelope and unmarshals its result into out.
 func decode(method, path string, resp *http.Response, out any) error {
+	raw, err := readEnvelope(method, path, resp)
+	if err != nil {
+		return err
+	}
+	var env struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return err
+	}
+	if out != nil {
+		return json.Unmarshal(env.Result, out)
+	}
+	return nil
+}
+
+// readEnvelope reads a response and checks the API's success flag; it
+// returns the whole envelope, for callers that need more than its result.
+func readEnvelope(method, path string, resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	var env struct {
 		Success bool                       `json:"success"`
 		Errors  []struct{ Message string } `json:"errors"`
-		Result  json.RawMessage            `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("cloudflare %s %s (%d): %s", method, path, resp.StatusCode, raw)
+		return nil, fmt.Errorf("cloudflare %s %s (%d): %s", method, path, resp.StatusCode, raw)
 	}
 	if !env.Success {
 		var msgs []string
 		for _, e := range env.Errors {
 			msgs = append(msgs, e.Message)
 		}
-		return fmt.Errorf("cloudflare %s %s: %s", method, path, strings.Join(msgs, "; "))
+		return nil, fmt.Errorf("cloudflare %s %s: %s", method, path, strings.Join(msgs, "; "))
 	}
-	if out != nil {
-		return json.Unmarshal(env.Result, out)
-	}
-	return nil
+	return raw, nil
 }
 
 type Zone struct {

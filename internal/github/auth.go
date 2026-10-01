@@ -231,11 +231,16 @@ func ConvertManifestCode(code string) (*ManifestConversion, error) {
 	return &mc, nil
 }
 
-func AuthorizeURL(clientID, redirectURI, state string) string {
+// AuthorizeURL starts a sign-in; with pickAccount GitHub asks which account
+// to use even if one is signed in, so the person has to act.
+func AuthorizeURL(clientID, redirectURI, state string, pickAccount bool) string {
 	v := url.Values{}
 	v.Set("client_id", clientID)
 	v.Set("redirect_uri", redirectURI)
 	v.Set("state", state)
+	if pickAccount {
+		v.Set("prompt", "select_account")
+	}
 	return "https://github.com/login/oauth/authorize?" + v.Encode()
 }
 

@@ -166,8 +166,8 @@ func runProxyPoller(s *store.Store) {
 	}
 }
 
-// runBackupScheduler checks hourly for databases due a backup (so restarts
-// don't postpone them) and cleans up once a day.
+// runBackupScheduler checks hourly for databases and the panel due a
+// backup (so restarts don't postpone them) and cleans up once a day.
 func runBackupScheduler(s *store.Store) {
 	time.Sleep(time.Minute) // let Docker and the databases come up first
 	lastCleanup := time.Now()
@@ -176,6 +176,9 @@ func runBackupScheduler(s *store.Store) {
 			if err != nil {
 				fmt.Println("backup failed for", name+":", err)
 			}
+		}
+		if err := ops.PanelBackupDue(s); err != nil {
+			fmt.Println("panel backup failed:", err)
 		}
 		if time.Since(lastCleanup) < 24*time.Hour {
 			continue
