@@ -133,6 +133,9 @@ func runContainer(ctx context.Context, name string, spec map[string]any, hostCon
 // AppLabel names the app an app or worker container belongs to.
 const AppLabel = "hakobu.app"
 
+// appCapDrop are the capabilities app and worker containers go without.
+var appCapDrop = []string{"NET_RAW", "MKNOD", "AUDIT_WRITE"}
+
 // AppOptions are what an app's containers (app and worker) have in common.
 type AppOptions struct {
 	App      string
@@ -150,6 +153,11 @@ func (o AppOptions) spec(imageTag string) (spec, hostConfig map[string]any) {
 		"Binds":       o.Binds,
 		// setuid binaries can't raise privileges inside the container.
 		"SecurityOpt": []string{"no-new-privileges"},
+		// Apps share their project's network with Postgres, RustFS and
+		// cloudflared: without raw sockets an app can't spoof ARP or DNS
+		// on it. The rest of Docker's defaults stay, for images that start
+		// as root and switch users.
+		"CapDrop": appCapDrop,
 	}
 	if o.MemoryMB > 0 {
 		hostConfig["Memory"] = o.MemoryMB << 20
@@ -220,6 +228,7 @@ func RunTunnelContainer(ctx context.Context, name, image, token, socketDir strin
 		"NetworkMode": EdgeNetwork,
 		"Binds":       []string{socketDir + ":/run/hakobu:z"},
 		"SecurityOpt": []string{"no-new-privileges"},
+		"CapDrop":     []string{"ALL"}, // it runs as a plain user and needs none
 	})
 }
 

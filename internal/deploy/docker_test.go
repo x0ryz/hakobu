@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"testing"
 	"time"
 )
@@ -47,5 +48,12 @@ func TestDockerWatchOOM(t *testing.T) {
 	time.Sleep(2 * oomEventGrace) // a double report would come by now
 	if len(got) > 0 {
 		t.Errorf("reported more than once: %v", <-got)
+	}
+}
+
+func TestAppContainersDropRawSockets(t *testing.T) {
+	_, hostConfig := AppOptions{App: "web", Network: "hakobu_p"}.spec("img")
+	if drop, _ := hostConfig["CapDrop"].([]string); !slices.Contains(drop, "NET_RAW") {
+		t.Errorf("CapDrop = %v", hostConfig["CapDrop"])
 	}
 }
