@@ -20,7 +20,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// httpClient waits at most two minutes for the API to answer, so a hung
+// request can't hold a deploy or backup forever. It isn't a limit on the
+// whole request: backups upload parts of hundreds of MB.
+var httpClient = func() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 2 * time.Minute
+	return &http.Client{Transport: t}
+}()
 
 // APIURL is the API's base; tests point it at a fake.
 var APIURL = "https://api.cloudflare.com/client/v4"
@@ -96,7 +106,7 @@ func (c Client) do(method, path, contentType string, body io.Reader, size int64)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", contentType)
-	return http.DefaultClient.Do(req)
+	return httpClient.Do(req)
 }
 
 // decode reads the API's JSON envelope and unmarshals its result into out.

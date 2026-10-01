@@ -20,6 +20,10 @@ import (
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
+// defaultHTTP gives up on an endpoint that doesn't answer; the requests
+// here are small.
+var defaultHTTP = &http.Client{Timeout: time.Minute}
+
 // Client signs requests with AWS Signature Version 4, path-style.
 type Client struct {
 	endpoint        string
@@ -27,7 +31,7 @@ type Client struct {
 	bucket          string
 	accessKeyID     string
 	secretAccessKey string
-	// HTTP sends the requests; nil is http.DefaultClient.
+	// HTTP sends the requests; nil is defaultHTTP.
 	HTTP *http.Client
 }
 
@@ -119,7 +123,7 @@ func (c *Client) call(method, path string, query url.Values, body []byte, okStat
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultHTTP
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

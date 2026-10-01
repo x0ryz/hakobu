@@ -18,6 +18,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// httpClient gives up on GitHub after a while: a hung request would
+// otherwise hold a deploy, and with it the app, forever.
+var httpClient = &http.Client{Timeout: time.Minute}
+
 func appJWT(appID int64, privateKeyPEM string) (string, error) {
 	key, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(privateKeyPEM))
 	if err != nil {
@@ -45,7 +49,7 @@ func call(method, rawURL, bearer string, body io.Reader, wantStatus int, out any
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -256,7 +260,7 @@ func SignIn(clientID, clientSecret, code, redirectURI string) (User, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return User{}, err
 	}
