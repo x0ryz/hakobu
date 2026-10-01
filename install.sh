@@ -14,7 +14,8 @@
 #
 # Optional: CLOUDFLARE_API_TOKEN (skips the token prompt),
 #           HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
-#           HAKOBU_BINARY (install this local binary instead of downloading one)
+#           HAKOBU_BINARY (install this local binary instead of downloading one),
+#           HAKOBU_FROM_SOURCE=1 (build the main branch instead of a release)
 set -euo pipefail
 
 HAKOBU_REPO="${HAKOBU_REPO:-x0ryz/hakobu}"
@@ -155,30 +156,55 @@ if [ -z "$ROOTFUL" ]; then
 fi
 # The running binary can't be overwritten ("text file busy").
 systemctl stop hakobu 2>/dev/null || true
+# A failed update leaves the installed hakobu running as it was.
+abort_install() {
+  rm -f /opt/hakobu/hakobu.new
+  echo "$1"
+  [ -x /opt/hakobu/hakobu ] && systemctl start hakobu 2>/dev/null
+  exit 1
+}
+# A release is installed unless asked otherwise: falling back to building
+# whatever the main branch holds when a lookup fails would quietly install
+# unreleased code.
 VERSION="${HAKOBU_VERSION:-}"
-if [ -z "${HAKOBU_BINARY:-}" ] && [ -z "$VERSION" ]; then
+if [ -z "${HAKOBU_BINARY:-}" ] && [ -z "${HAKOBU_FROM_SOURCE:-}" ] && [ -z "$VERSION" ]; then
   VERSION="$( (curl -fsSL "https://api.github.com/repos/${HAKOBU_REPO}/releases/latest" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4) || true)"
+  if [ -z "$VERSION" ]; then
+    abort_install "couldn't find the latest hakobu release (GitHub API unreachable or rate-limited); set HAKOBU_VERSION, e.g. HAKOBU_VERSION=v0.4.0"
+  fi
 fi
 if [ -n "${HAKOBU_BINARY:-}" ]; then
   cp "$HAKOBU_BINARY" /opt/hakobu/hakobu
   echo "    local binary $HAKOBU_BINARY"
-elif [ -n "$VERSION" ] && curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu.new; then
+elif [ -z "${HAKOBU_FROM_SOURCE:-}" ]; then
+  if ! curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu.new; then
+    abort_install "couldn't download hakobu-linux-${ARCH} ${VERSION}"
+  fi
   # A download that doesn't match the release's checksum is never installed.
   SUMS="$(curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/checksums.txt")"
   WANT="$(printf '%s\n' "$SUMS" | awk -v f="hakobu-linux-${ARCH}" '$2 == f {print $1}')"
   GOT="$(sha256sum /opt/hakobu/hakobu.new | cut -d' ' -f1)"
   if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then
-    rm -f /opt/hakobu/hakobu.new
-    echo "checksum mismatch for hakobu-linux-${ARCH} ${VERSION}, not installing it"
-    exit 1
+    abort_install "checksum mismatch for hakobu-linux-${ARCH} ${VERSION}, not installing it"
   fi
   mv /opt/hakobu/hakobu.new /opt/hakobu/hakobu
   echo "    hakobu $VERSION (checksum verified)"
 else
-  echo "==> no release binary found, building from source"
+  echo "==> building hakobu from the main branch"
   GO_NEED="1.27.1"
+  case "$ARCH" in
+    amd64) GO_SHA256="63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445" ;;
+    arm64) GO_SHA256="3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec" ;;
+  esac
   if ! command -v go >/dev/null || [ "$(printf '%s\n%s' "$GO_NEED" "$(go env GOVERSION | cut -c3-)" | sort -V | head -1)" != "$GO_NEED" ]; then
-    curl -fsSL "https://go.dev/dl/go${GO_NEED}.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
+    TMP="$(mktemp -d)"
+    curl -fsSL "https://go.dev/dl/go${GO_NEED}.linux-${ARCH}.tar.gz" -o "$TMP/go.tar.gz"
+    if ! echo "${GO_SHA256}  $TMP/go.tar.gz" | sha256sum -c --quiet -; then
+      rm -rf "$TMP"
+      abort_install "checksum mismatch for go${GO_NEED}, not installing it"
+    fi
+    tar -C /usr/local -xzf "$TMP/go.tar.gz"
+    rm -rf "$TMP"
     export PATH="/usr/local/go/bin:$PATH"
   fi
   SRC="$(mktemp -d)"
