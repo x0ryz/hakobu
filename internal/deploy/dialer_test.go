@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -217,4 +218,58 @@ func TestDialerKeepsNoDescriptors(t *testing.T) {
 	if after := openFds(); after > before {
 		t.Errorf("%d descriptors open after 750 dials, %d before", after, before)
 	}
+}
+
+// A helper run by the Docker user is reached through its socket, and a
+// restarted one (as when Docker restarts) is reconnected to.
+func TestDialerSocket(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	path := filepath.Join(t.TempDir(), "dialer.sock")
+	serve := func() {
+		go func() {
+			_ = serveDialerSocket(path, func(ip net.IP) bool { return ip.Equal(net.IPv4(127, 0, 0, 1)) })
+		}()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(path); err == nil {
+				return
+			} else if time.Now().After(deadline) {
+				t.Fatal("helper socket never appeared")
+			}
+		}
+	}
+	serve()
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o660 {
+		t.Errorf("socket mode = %v, %v", fi.Mode().Perm(), err)
+	}
+	t.Setenv(dialerSocketEnv, path)
+	h := &dialerHelper{}
+	t.Cleanup(func() { h.mu.Lock(); h.stopLocked(); h.mu.Unlock() })
+	conn, err := h.dial(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	// The helper's connection breaks, like when it restarts with Docker.
+	h.mu.Lock()
+	h.control.Close()
+	h.mu.Unlock()
+	if conn, err = h.dial(context.Background(), "tcp", ln.Addr().String()); err != nil {
+		t.Fatalf("after a restart: %v", err)
+	}
+	conn.Close()
 }

@@ -71,7 +71,7 @@ if [ "$(railpack --version 2>/dev/null | grep -o 'v\?[0-9][0-9.]*' | head -1 | s
 fi
 
 if [ -z "$ROOTFUL" ]; then
-  echo "==> setting up rootless Docker for the hakobu user"
+  echo "==> setting up rootless Docker for the hakobu-docker user"
   if command -v apt-get >/dev/null; then
     apt-get install -y uidmap dbus-user-session docker-ce-rootless-extras >/dev/null
   else
@@ -82,13 +82,22 @@ if [ -z "$ROOTFUL" ]; then
     exit 1
   fi
   id hakobu >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/hakobu --shell /usr/sbin/nologin hakobu
-  HK_UID="$(id -u hakobu)"
-  HK_RUN="/run/user/$HK_UID"
+  id hakobu-docker >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/hakobu-docker --shell /usr/sbin/nologin hakobu-docker
+  # hakobu reaches Docker's socket and the container dialer's through the
+  # Docker user's group; the Docker user gets nothing of hakobu's.
+  usermod -aG hakobu-docker hakobu
+  DK_UID="$(id -u hakobu-docker)"
+  DK_RUN="/run/user/$DK_UID"
+  # Both sockets live here rather than in the Docker user's runtime
+  # directory, which is private to it and recreated at every boot.
+  SOCK_DIR=/run/hakobu-docker
+  echo "d $SOCK_DIR 0750 hakobu-docker hakobu-docker -" > /etc/tmpfiles.d/hakobu-docker.conf
+  systemd-tmpfiles --create /etc/tmpfiles.d/hakobu-docker.conf
   # Subordinate IDs for the containers' users, after every range in use.
   for f in /etc/subuid /etc/subgid; do
     touch "$f"
-    if ! grep -q '^hakobu:' "$f"; then
-      echo "hakobu:$(awk -F: 'BEGIN { m = 100000 } $2 + $3 > m { m = $2 + $3 } END { print m }' "$f"):65536" >> "$f"
+    if ! grep -q '^hakobu-docker:' "$f"; then
+      echo "hakobu-docker:$(awk -F: 'BEGIN { m = 100000 } $2 + $3 > m { m = $2 + $3 } END { print m }' "$f"):65536" >> "$f"
     fi
   done
   # Ubuntu 24.04+ lets unprivileged users create user namespaces only
@@ -110,29 +119,57 @@ include <tunables/global>
 EOF
     apparmor_parser -r /etc/apparmor.d/usr.bin.rootlesskit
   fi
-  # Memory and CPU limits need the cgroup controllers delegated to hakobu's
-  # user manager.
-  mkdir -p "/etc/systemd/system/user@$HK_UID.service.d"
-  cat > "/etc/systemd/system/user@$HK_UID.service.d/delegate.conf" <<'EOF'
+  # Memory and CPU limits need the cgroup controllers delegated to the
+  # Docker user's user manager.
+  mkdir -p "/etc/systemd/system/user@$DK_UID.service.d"
+  cat > "/etc/systemd/system/user@$DK_UID.service.d/delegate.conf" <<'EOF'
 [Service]
 Delegate=cpu cpuset io memory pids
 EOF
   systemctl daemon-reload
-  # Lingering starts hakobu's user manager (and its Docker) at boot.
-  loginctl enable-linger hakobu
+  # Lingering starts the Docker user's manager (and its Docker) at boot.
+  loginctl enable-linger hakobu-docker
   for _ in $(seq 1 30); do
-    [ -S "$HK_RUN/bus" ] && break
+    [ -S "$DK_RUN/bus" ] && break
     sleep 1
   done
-  as_hakobu() {
-    (cd / && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DBUS_SESSION_BUS_ADDRESS="unix:path=$HK_RUN/bus" "$@")
+  as_docker() {
+    (cd / && runuser -u hakobu-docker -- env HOME=/home/hakobu-docker XDG_RUNTIME_DIR="$DK_RUN" DBUS_SESSION_BUS_ADDRESS="unix:path=$DK_RUN/bus" "$@")
   }
-  if ! as_hakobu systemctl --user -q is-active docker; then
-    as_hakobu dockerd-rootless-setuptool.sh install
+  if ! as_docker systemctl --user -q is-enabled docker 2>/dev/null; then
+    as_docker dockerd-rootless-setuptool.sh install
   fi
-  as_hakobu systemctl --user -q enable docker
+  # Docker listens in the shared directory, its socket in group 0 of its
+  # user namespace: the Docker user's own group on the host. The dialer runs
+  # in RootlessKit's namespaces, which only the Docker user can enter, and
+  # restarts with Docker, whose restart makes new ones.
+  UNITS=/home/hakobu-docker/.config/systemd/user
+  install -d -o hakobu-docker -g hakobu-docker "$UNITS/docker.service.d"
+  cat > "$UNITS/docker.service.d/hakobu.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=$(command -v dockerd-rootless.sh) -H unix://$SOCK_DIR/docker.sock --group 0
+EOF
+  cat > "$UNITS/hakobu-dialer.service" <<EOF
+[Unit]
+Description=hakobu's connections to containers
+BindsTo=docker.service
+After=docker.service
+
+[Service]
+ExecStart=/bin/sh -c 'exec nsenter -U --preserve-credentials -n -t "\$\$(cat "\$\$XDG_RUNTIME_DIR/dockerd-rootless/child_pid")" -- /opt/hakobu/hakobu dialer $SOCK_DIR/dialer.sock'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=docker.service
+EOF
+  chown -R hakobu-docker:hakobu-docker /home/hakobu-docker/.config
+  as_docker systemctl --user daemon-reload
+  as_docker systemctl --user -q enable docker hakobu-dialer
+  as_docker systemctl --user restart docker
   for _ in $(seq 1 60); do
-    as_hakobu env DOCKER_HOST="unix://$HK_RUN/docker.sock" docker info >/dev/null 2>&1 && break
+    as_docker env DOCKER_HOST="unix://$SOCK_DIR/docker.sock" docker info >/dev/null 2>&1 && break
     sleep 1
   done
   # A system Docker installed just now would sit unused as a root-equivalent
@@ -219,7 +256,9 @@ echo "==> connecting Cloudflare"
 if [ -n "$ROOTFUL" ]; then
   (cd /opt/hakobu && ./hakobu setup) < /dev/tty
 else
-  (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DOCKER_HOST="unix://$HK_RUN/docker.sock" CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" ./hakobu setup) < /dev/tty
+  # The dialer runs the binary installed just now.
+  as_docker systemctl --user restart hakobu-dialer
+  (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu DOCKER_HOST="unix://$SOCK_DIR/docker.sock" HAKOBU_DIALER_SOCKET="$SOCK_DIR/dialer.sock" CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" ./hakobu setup) < /dev/tty
 fi
 
 if [ -n "$ROOTFUL" ]; then
@@ -244,27 +283,30 @@ else
 [Unit]
 Description=hakobu
 Wants=network-online.target
-After=network-online.target user@$HK_UID.service
-Requires=user@$HK_UID.service
+After=network-online.target user@$DK_UID.service
+Requires=user@$DK_UID.service
 
 [Service]
 User=hakobu
 Group=hakobu
 WorkingDirectory=/opt/hakobu
-Environment=XDG_RUNTIME_DIR=$HK_RUN
-Environment=DOCKER_HOST=unix://$HK_RUN/docker.sock
-# Docker is a user service of hakobu's that starts alongside; the agent
-# starts the tunnel once, so it waits for Docker to answer.
+Environment=DOCKER_HOST=unix://$SOCK_DIR/docker.sock
+Environment=HAKOBU_DIALER_SOCKET=$SOCK_DIR/dialer.sock
+# Docker is a user service of hakobu-docker's that starts alongside; the
+# agent starts the tunnel once, so it waits for Docker to answer.
 ExecStartPre=/bin/sh -c 'for i in \$\$(seq 1 120); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 ExecStart=/opt/hakobu/hakobu agent
 Restart=always
 RestartSec=5
 TimeoutStartSec=150
 
-# Sandboxing. The container dialer enters rootless Docker's namespaces with
-# nsenter, so RestrictNamespaces, PrivateUsers and SystemCallFilter stay off;
-# ProtectProc stays default so container ports can be read from /proc.
+# Sandboxing. The container dialer is the Docker user's, so hakobu enters no
+# namespaces. ProtectProc stays default so container ports can be read from
+# /proc; PrivateUsers would hide the Docker user's group.
 NoNewPrivileges=yes
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=read-only

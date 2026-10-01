@@ -23,11 +23,21 @@ import (
 // namespace. For each connection hakobu sends the helper the address and one
 // end of a fresh socketpair; the helper dials and sends the connected socket
 // back over it (SCM_RIGHTS). A socket keeps working outside the namespace it
-// was made in, so what hakobu gets is a plain TCP connection. Nothing is
-// listening anywhere, so there's no socket file a container could be given.
+// was made in, so what hakobu gets is a plain TCP connection.
+//
+// When Docker runs as the same user as hakobu, hakobu starts the helper
+// itself and talks to it over a socketpair: nothing listens anywhere. When
+// Docker runs as a user of its own (so a container escape can't read
+// hakobu's data), hakobu can't enter that user's namespaces; the helper is
+// then a service of the Docker user (`hakobu dialer`, see install.sh),
+// listening on HAKOBU_DIALER_SOCKET next to Docker's socket, in a
+// directory only the two users reach and no container mounts.
 
 // dialerEnv marks the helper process; see RunDialerIfChild.
 const dialerEnv = "HAKOBU_DIALER"
+
+// dialerSocketEnv names the socket of a helper run by the Docker user.
+const dialerSocketEnv = "HAKOBU_DIALER_SOCKET"
 
 // dialerTimeout bounds the helper's dial when the caller set no deadline.
 const dialerTimeout = 10 * time.Second
@@ -144,6 +154,9 @@ func (h *dialerHelper) dial(ctx context.Context, network, addr string) (net.Conn
 // doesn't die then, it keeps the old namespace alive and sees none of the
 // new containers.
 func (h *dialerHelper) current() (*net.UnixConn, error) {
+	if path := os.Getenv(dialerSocketEnv); path != "" {
+		return h.connect(path)
+	}
 	pid, ns, err := rootlessNetns()
 	if err != nil {
 		return nil, err
@@ -163,6 +176,23 @@ func (h *dialerHelper) current() (*net.UnixConn, error) {
 		return nil, err
 	}
 	h.ns, h.control, h.cmd = ns, control, cmd
+	return control, nil
+}
+
+// connect returns a connection to the Docker user's helper, opening one if
+// needed. That helper restarts with Docker, which closes the connection, so
+// a dial that finds it gone (errHelperGone) reconnects.
+func (h *dialerHelper) connect(path string) (*net.UnixConn, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.control != nil {
+		return h.control, nil
+	}
+	control, err := net.DialUnix("unixpacket", nil, &net.UnixAddr{Name: path, Net: "unixpacket"})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errHelperGone, err)
+	}
+	h.control = control
 	return control, nil
 }
 
@@ -275,6 +305,35 @@ func RunDialerIfChild() {
 	}
 	serveDialer(control, allowedTarget)
 	os.Exit(0)
+}
+
+// ServeDialerSocket is the helper as the Docker user's service: started in
+// RootlessKit's network namespace, it serves every hakobu that connects to
+// path. The socket is readable by the directory's group (hakobu's).
+func ServeDialerSocket(path string) error {
+	return serveDialerSocket(path, allowedTarget)
+}
+
+func serveDialerSocket(path string, allowed func(ip net.IP) bool) error {
+	_ = os.Remove(path) // left by the previous run
+	ln, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: path, Net: "unixpacket"})
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	if err := os.Chmod(path, 0o660); err != nil {
+		return err
+	}
+	for {
+		control, err := ln.AcceptUnix()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer control.Close()
+			serveDialer(control, allowed)
+		}()
+	}
 }
 
 // serveDialer answers dial requests until control closes.

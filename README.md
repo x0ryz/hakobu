@@ -57,9 +57,10 @@ Every app then gets its own address in any domain of the account (`app.example.c
 Lost the setup link: `journalctl -u hakobu | grep setup`. Give hakobu a new Cloudflare
 token (after rolling it, say): `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
 
-Hakobu runs as the unprivileged `hakobu` user with its own
-[rootless Docker](https://docs.docker.com/engine/security/rootless/), so neither a break-in
-into hakobu nor a container escape gets root on the server. Servers installed before that
+Hakobu runs as the unprivileged `hakobu` user, and
+[rootless Docker](https://docs.docker.com/engine/security/rootless/) as another one,
+`hakobu-docker`: neither a break-in into hakobu nor a container escape gets root on the
+server, and an escape can't read hakobu's data (its secrets and master key). Servers installed before that
 keep running as root under the system Docker (their databases live there) and the installer
 only updates them; to move one to rootless Docker, install hakobu on a clean server.
 
