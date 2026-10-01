@@ -57,7 +57,7 @@ func (c Client) CheckToken() ([]Zone, error) {
 		return nil, fmt.Errorf("the token doesn't work: %w", err)
 	}
 	if len(zones) == 0 {
-		return nil, fmt.Errorf("the token sees no domains: give it Zone Read and DNS Edit for all zones of the account")
+		return nil, fmt.Errorf("the token sees no domains: give it Zone Read and DNS Edit for the domains hakobu should use")
 	}
 	if err := c.call("GET", "/accounts/"+zones[0].Account.ID+"/cfd_tunnel?per_page=1", nil, nil); err != nil {
 		return nil, fmt.Errorf("the token can't manage tunnels: give it Cloudflare Tunnel Edit (%w)", err)

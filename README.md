@@ -12,9 +12,10 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Resource limits**: memory and CPU caps per app and worker; out-of-memory kills show up on the app page.
 - **Databases** live in one shared Postgres container, each with its own role. Backups are one click in
   Settings: hakobu creates a private R2 bucket in your Cloudflare account and backs up every database daily.
-  No S3 keys exist for it (hakobu writes with its Cloudflare sign-in), and the bucket's lock keeps each backup
-  for 7 days even from hakobu. Each backup is test-restored into a temporary database right after upload,
-  and old ones are rotated (the last 7, one a week for a month).
+  No S3 keys exist for it (hakobu writes with its Cloudflare token), and the bucket's lock keeps each backup
+  for 7 days even from a bug in hakobu. It doesn't stop someone who has taken over the server: the token
+  can change the lock. Each backup's SHA-256 is kept and checked before a restore; each is test-restored
+  into a temporary database right after upload, and old ones are rotated (the last 7, one a week for a month).
 - **Storages** for your apps' files: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
@@ -41,7 +42,9 @@ curl -fsSL https://hakobu.dev/install.sh | sudo bash
    filled in: read your domains, manage their DNS records, create a tunnel and keep
    database backups in R2. Select **Continue to summary** → **Create Token**, copy the
    token and paste it into the terminal (it isn't echoed). Or set `CLOUDFLARE_API_TOKEN`
-   before running the installer.
+   before running the installer. Under **Zone Resources** you can pick just the domains
+   hakobu should use instead of all of them: whoever takes over the server gets the
+   token, and with it the DNS of every domain it covers.
 2. Pick one of your domains from the list and the panel's subdomain (default `hakobu`).
    Hakobu creates the tunnel and a DNS record for the panel.
 3. Open the printed link, `https://hakobu.example.com/setup?token=…`, click

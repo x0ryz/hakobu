@@ -94,6 +94,8 @@ func connectCloudflare(s *store.Store) error {
 	host, _ := os.Hostname()
 	fmt.Println("\nOpen this link, select Continue to summary and Create Token (the permissions are filled in):")
 	fmt.Println("\n  " + cloudflare.TokenTemplateURL("hakobu "+strings.Split(host, ".")[0]))
+	fmt.Println("\nUnder Zone Resources, pick only the domains hakobu should use: the token can")
+	fmt.Println("change the DNS of every domain it covers.")
 	fmt.Println("\nCopy the token Cloudflare shows and paste it here (it isn't echoed).")
 	for attempt := 0; ; attempt++ {
 		fmt.Print("API token: ")
