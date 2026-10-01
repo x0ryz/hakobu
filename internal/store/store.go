@@ -21,10 +21,19 @@ import (
 type Store struct {
 	*Queries
 	db      *sql.DB
+	dir     string // the database's directory, with the sealed snapshots
 	keyPath string
 }
 
+// Open opens the database at path with its master key next to it, as tests
+// and tools do; hakobu itself keeps the key apart (OpenWithKey).
 func Open(path string) (*Store, error) {
+	return OpenWithKey(path, filepath.Join(filepath.Dir(path), "master.key"))
+}
+
+// OpenWithKey opens the database at path, its secrets encrypted with the
+// master key in keyPath (created if there's none and nothing needs one).
+func OpenWithKey(path, keyPath string) (*Store, error) {
 	// WAL + busy_timeout: background deploys and pollers write while the
 	// dashboard reads.
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
@@ -34,7 +43,7 @@ func Open(path string) (*Store, error) {
 	if err := migrate(db); err != nil {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	s := &Store{Queries: New(db), db: db, keyPath: filepath.Join(filepath.Dir(path), "master.key")}
+	s := &Store{Queries: New(db), db: db, dir: filepath.Dir(path), keyPath: keyPath}
 	if err := checkKeyNotLost(db, s.keyPath, secret.KeyMissing(s.keyPath)); err != nil {
 		return nil, err
 	}
@@ -149,7 +158,7 @@ func (s *Store) finishRotation() error {
 // (data/snapshots, sealed by ops) to the new key while both keys are
 // loaded. A file that fails only costs that undo, not the rotation.
 func (s *Store) rewrapSealedFiles() {
-	files, _ := filepath.Glob(filepath.Join(filepath.Dir(s.keyPath), "snapshots", "*.enc"))
+	files, _ := filepath.Glob(filepath.Join(s.dir, "snapshots", "*.enc"))
 	for _, f := range files {
 		if err := secret.RewrapFile(f); err != nil {
 			fmt.Println("master key rotation: snapshot", filepath.Base(f), "can't be read after it:", err)

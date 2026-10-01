@@ -339,12 +339,24 @@ func TestMissingKeyWithSecrets(t *testing.T) {
 }
 
 // The database snapshots ops seals next to the database stay readable
-// after the master key is rotated.
+// after the master key, kept in a directory of its own, is rotated.
 func TestRotationRewrapsSnapshots(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(filepath.Join(dir, "hakobu.db"))
+	root := t.TempDir()
+	dir, keyPath := filepath.Join(root, "data"), filepath.Join(root, "key", "master.key")
+	for _, d := range []string{dir, filepath.Dir(keyPath)} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := OpenWithKey(filepath.Join(dir, "hakobu.db"), keyPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Errorf("master key not where asked: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "master.key*")); len(left) != 0 {
+		t.Errorf("master key in the database's directory: %v", left)
 	}
 	snap := filepath.Join(dir, "snapshots", "web.dump.enc")
 	if err := os.MkdirAll(filepath.Dir(snap), 0o700); err != nil {

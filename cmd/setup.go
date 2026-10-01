@@ -33,7 +33,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if err := config.PrepareDataDir(); err != nil {
 		return err
 	}
-	s, err := store.Open("data/hakobu.db")
+	s, err := store.OpenWithKey(config.DatabaseFile, config.MasterKeyFile)
 	if err != nil {
 		return err
 	}

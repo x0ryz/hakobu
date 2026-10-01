@@ -20,6 +20,7 @@ set -euo pipefail
 
 HAKOBU_REPO="${HAKOBU_REPO:-x0ryz/hakobu}"
 DATA=/opt/hakobu/data
+KEY_DIR=/opt/hakobu/key # the master key, apart from data/
 
 if [ "$(id -u)" -ne 0 ]; then
   if [ "$HAKOBU_REPO" = "x0ryz/hakobu" ]; then
@@ -184,12 +185,12 @@ EOF
 fi
 
 echo "==> installing hakobu to /opt/hakobu"
-mkdir -p "$DATA" /opt/hakobu/run
-chmod 700 "$DATA"
+mkdir -p "$DATA" "$KEY_DIR" /opt/hakobu/run
+chmod 700 "$DATA" "$KEY_DIR"
 if [ -z "$ROOTFUL" ]; then
-  # hakobu writes only its data and the panel socket's directory, which
-  # cloudflared mounts; the binary stays root's.
-  chown hakobu:hakobu "$DATA" /opt/hakobu/run
+  # hakobu writes only its data, its key and the panel socket's directory,
+  # which cloudflared mounts; the binary stays root's.
+  chown hakobu:hakobu "$DATA" "$KEY_DIR" /opt/hakobu/run
 fi
 # The running binary can't be overwritten ("text file busy").
 systemctl stop hakobu 2>/dev/null || true
@@ -310,7 +311,7 @@ SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/hakobu/data /opt/hakobu/run /home/hakobu/.docker
+ReadWritePaths=/opt/hakobu/data /opt/hakobu/key /opt/hakobu/run /home/hakobu/.docker
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

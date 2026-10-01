@@ -23,9 +23,9 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Cloudflare Tunnel**: panel and apps on your domain with HTTPS, no open ports. cloudflared runs in its own
   container and sends app traffic straight to the app's container, so restarting or upgrading hakobu doesn't take apps down.
 - **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens, but also build logs, worker
-  commands and your apps' errors and logs, are encrypted in the SQLite database with a key in `data/master.key`; the
-  database snapshots kept for Rollback are sealed with it too. Keep the key with any copy of `data/`: without it
-  nothing secret can be read, and hakobu refuses to start rather than make a new key over data it can't read.
+  commands and your apps' errors and logs, are encrypted in the SQLite database with a key in `key/master.key`, kept
+  apart from `data/`; the database snapshots kept for Rollback are sealed with it too. Keep a copy of the key
+  wherever you keep a copy of `data/`: without it nothing secret can be read, and hakobu refuses to start rather than make a new key over data it can't read.
 - **Keeps the disk in check**: each app keeps only its live image and one for rollback; unused build cache is dropped daily.
 - Single Go binary + SQLite. Needs only Docker, which the installer sets up rootless.
 
@@ -92,7 +92,7 @@ go build -o hakobu . && ./hakobu agent --public-host <host that reaches 127.0.0.
 ```
 
 Requires Go 1.27+ and Docker (plus Railpack and a `buildkit` container for non-Dockerfile builds).
-State lives in `data/` (SQLite, its master key, clones); `run/` holds the panel's socket for cloudflared.
+State lives in `data/` (SQLite, clones) and its master key in `key/`; `run/` holds the panel's socket for cloudflared.
 
 Tests that need Docker (they start their own containers) run with `HAKOBU_DOCKER_TEST=1 go test ./...`.
 

@@ -20,21 +20,34 @@ var (
 	RetentionDays  = envInt("HAKOBU_RETENTION_DAYS", 7)
 )
 
+// The master key lives outside data/, so a copy of data/ (a backup of the
+// database, say) doesn't carry the key to its secrets.
+const (
+	DatabaseFile  = "data/hakobu.db"
+	MasterKeyFile = "key/master.key"
+)
+
 const (
 	publicHostFile = "data/public_host"
 	appsDomainFile = "data/apps_domain"
 	setupTokenFile = "data/setup_token"
 )
 
-// PrepareDataDir makes data/ (database, secrets, clones) private to the user
-// hakobu runs as, including on installs that created it world-readable, and
-// makes every file hakobu creates from now on private too.
+// PrepareDataDir makes data/ (database, secrets, clones) and key/ (the
+// master key) private to the user hakobu runs as, including on installs
+// that created them world-readable, and makes every file hakobu creates
+// from now on private too.
 func PrepareDataDir() error {
 	syscall.Umask(0o077)
-	if err := os.MkdirAll("data", 0o700); err != nil {
-		return err
+	for _, dir := range []string{"data", filepath.Dir(MasterKeyFile)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return err
+		}
 	}
-	return os.Chmod("data", 0o700)
+	return nil
 }
 
 // PublicHost is the panel's hostname (no scheme), chosen by `hakobu setup`.

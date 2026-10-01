@@ -1,7 +1,8 @@
 // Package secret encrypts secrets at rest in hakobu's database with
-// AES-256-GCM. The key lives in data/master.key (or HAKOBU_MASTER_KEY), so a
-// copy of the database alone — a backup, a stray download — reveals nothing.
-// It doesn't help against someone who can read the whole data directory.
+// AES-256-GCM. The key lives in key/master.key, outside data/ (or in
+// HAKOBU_MASTER_KEY), so a copy of data/ alone — a backup, a stray
+// download — reveals nothing. It doesn't help against someone who can read
+// both directories.
 //
 // The key can be rotated: the new key goes to master.key.new and encrypts
 // from then on while the old one still decrypts, the store re-encrypts
