@@ -206,13 +206,14 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	return tx.Commit()
 }
 
-// Owner returns the owner's GitHub login, "" before anyone has claimed the panel.
-func (s *Store) Owner(ctx context.Context) (string, error) {
-	login, err := s.GetOwner(ctx)
+// Owner returns the GitHub account that claimed the panel; its GitHubID is
+// 0 before anyone has.
+func (s *Store) Owner(ctx context.Context) (Owner, error) {
+	o, err := s.GetOwner(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return Owner{}, nil
 	}
-	return login, err
+	return Owner{ID: 1, GitHubID: o.GitHubID, GitHubLogin: o.GitHubLogin}, err
 }
 
 // Sessions are stored by the SHA-256 of their token, so the database
@@ -222,21 +223,22 @@ func sessionID(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Store) NewSession(ctx context.Context, token, githubLogin string, ttl time.Duration) error {
-	return s.CreateSession(ctx, CreateSessionParams{ID: sessionID(token), GitHubLogin: githubLogin, ExpiresAt: timestamp(time.Now().Add(ttl))})
+func (s *Store) NewSession(ctx context.Context, token string, githubID int64, ttl time.Duration) error {
+	return s.CreateSession(ctx, CreateSessionParams{ID: sessionID(token), GitHubID: githubID, ExpiresAt: timestamp(time.Now().Add(ttl))})
 }
 
-// SessionLogin returns the session's GitHub login; expired sessions are deleted.
-func (s *Store) SessionLogin(ctx context.Context, token string) (string, error) {
+// SessionUser returns the GitHub user ID of the session's account; expired
+// sessions are deleted.
+func (s *Store) SessionUser(ctx context.Context, token string) (int64, error) {
 	sess, err := s.GetSessionRow(ctx, sessionID(token))
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	if sess.ExpiresAt < timestamp(time.Now()) {
 		_ = s.DeleteSession(ctx, sess.ID) // PruneOldData removes it otherwise
-		return "", fmt.Errorf("session expired")
+		return 0, fmt.Errorf("session expired")
 	}
-	return sess.GitHubLogin, nil
+	return sess.GitHubID, nil
 }
 
 func (s *Store) EndSession(ctx context.Context, token string) error {

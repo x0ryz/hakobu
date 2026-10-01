@@ -212,13 +212,16 @@ UPDATE github_app SET webhook_secret = ? WHERE id = 1;
 SELECT * FROM github_app WHERE id = 1;
 
 -- name: GetOwner :one
-SELECT github_login FROM owner WHERE id = 1;
+SELECT github_id, github_login FROM owner WHERE id = 1;
 
 -- name: SetOwner :exec
-INSERT INTO owner (id, github_login) VALUES (1, ?);
+INSERT INTO owner (id, github_id, github_login) VALUES (1, ?, ?);
+
+-- name: SetOwnerLogin :exec
+UPDATE owner SET github_login = ? WHERE id = 1;
 
 -- name: CreateSession :exec
-INSERT INTO sessions (id, github_login, expires_at) VALUES (?, ?, ?);
+INSERT INTO sessions (id, github_id, expires_at) VALUES (?, ?, ?);
 
 -- name: GetSessionRow :one
 SELECT * FROM sessions WHERE id = ?;

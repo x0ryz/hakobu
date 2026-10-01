@@ -119,16 +119,19 @@ CREATE TABLE github_app (
 	client_secret TEXT NOT NULL
 );
 
--- The GitHub login that claimed the panel; only it can sign in.
+-- The GitHub account that claimed the panel; only it can sign in. It's
+-- known by its numeric ID: a login can be renamed and then taken by someone
+-- else. The login is only shown.
 CREATE TABLE owner (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
+	github_id INTEGER NOT NULL,
 	github_login TEXT NOT NULL
 );
 
--- id is the SHA-256 of the session cookie.
+-- id is the SHA-256 of the session cookie; github_id the signed-in account.
 CREATE TABLE sessions (
 	id TEXT PRIMARY KEY,
-	github_login TEXT NOT NULL,
+	github_id INTEGER NOT NULL,
 	expires_at TEXT NOT NULL
 );
 

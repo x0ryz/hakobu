@@ -500,7 +500,7 @@ func TestDockerRotateSecrets(t *testing.T) {
 	must(SetAppEnv(s, app.Name, "API_KEY=abc"))
 	must(SealVar(s, "app", app.Name, "SEALED", "shh"))
 	must(s.SetAppSentryKey(ctx(), store.SetAppSentryKeyParams{Name: app.Name, SentryKey: "oldsentrykey"}))
-	must(s.NewSession(ctx(), "tok", "me", time.Hour))
+	must(s.NewSession(ctx(), "tok", 42, time.Hour))
 
 	a, _ := s.GetApp(ctx(), app.Name)
 	buildTestImage(t, nextImageTag(a), "v1")
@@ -548,7 +548,7 @@ func TestDockerRotateSecrets(t *testing.T) {
 	if !strings.Contains(env["DATABASE_URL"], string(dbAfter.Password)) || env["S3_ACCESS_KEY_ID"] != stAfter.AccessKeyID || env["SEALED"] != "shh" {
 		t.Errorf("the app runs with old values: DATABASE_URL=%q S3_ACCESS_KEY_ID=%q", env["DATABASE_URL"], env["S3_ACCESS_KEY_ID"])
 	}
-	if _, err := s.SessionLogin(ctx(), "tok"); err == nil {
+	if _, err := s.SessionUser(ctx(), "tok"); err == nil {
 		t.Error("sessions survived")
 	}
 	if keyAfter, _ := os.ReadFile("master.key"); string(keyAfter) == string(keyBefore) {

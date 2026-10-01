@@ -72,29 +72,29 @@ func TestStore(t *testing.T) {
 		t.Error("deploy logs survived app deletion")
 	}
 
-	if owner, err := s.Owner(ctx); err != nil || owner != "" {
-		t.Errorf("Owner = %q, %v before setup", owner, err)
+	if owner, err := s.Owner(ctx); err != nil || owner.GitHubID != 0 {
+		t.Errorf("Owner = %+v, %v before setup", owner, err)
 	}
-	if err := s.SetOwner(ctx, "me"); err != nil {
+	if err := s.SetOwner(ctx, SetOwnerParams{GitHubID: 42, GitHubLogin: "me"}); err != nil {
 		t.Fatal(err)
 	}
-	if owner, _ := s.Owner(ctx); owner != "me" {
-		t.Errorf("Owner = %q", owner)
+	if owner, _ := s.Owner(ctx); owner.GitHubID != 42 || owner.GitHubLogin != "me" {
+		t.Errorf("Owner = %+v", owner)
 	}
-	if err := s.SetOwner(ctx, "someone-else"); err == nil {
+	if err := s.SetOwner(ctx, SetOwnerParams{GitHubID: 7, GitHubLogin: "someone-else"}); err == nil {
 		t.Error("the panel can only be claimed once")
 	}
 
-	if err := s.NewSession(ctx, "live", "me", time.Hour); err != nil {
+	if err := s.NewSession(ctx, "live", 42, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.NewSession(ctx, "old", "me", -time.Hour); err != nil {
+	if err := s.NewSession(ctx, "old", 42, -time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if login, err := s.SessionLogin(ctx, "live"); err != nil || login != "me" {
-		t.Errorf("live session = %q, %v", login, err)
+	if id, err := s.SessionUser(ctx, "live"); err != nil || id != 42 {
+		t.Errorf("live session = %d, %v", id, err)
 	}
-	if _, err := s.SessionLogin(ctx, "old"); err == nil {
+	if _, err := s.SessionUser(ctx, "old"); err == nil {
 		t.Error("expired session accepted")
 	}
 	if err := s.PruneOldData(ctx, 7); err != nil {
@@ -153,11 +153,11 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 		t.Error("plaintext in a secret column was accepted")
 	}
 
-	if err := s.NewSession(ctx, "tok", "me", time.Hour); err != nil {
+	if err := s.NewSession(ctx, "tok", 42, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if login, err := s.SessionLogin(ctx, "tok"); err != nil || login != "me" {
-		t.Errorf("session = %q, %v", login, err)
+	if id, err := s.SessionUser(ctx, "tok"); err != nil || id != 42 {
+		t.Errorf("session = %d, %v", id, err)
 	}
 	var stored string
 	if err := s.db.QueryRow(`SELECT id FROM sessions`).Scan(&stored); err != nil {

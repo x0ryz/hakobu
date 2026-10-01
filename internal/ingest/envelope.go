@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -42,6 +43,11 @@ func ParseEnvelope(body []byte) ([]Item, error) {
 
 		var payload []byte
 		if header.Length != nil {
+			// The length comes from the client: never allocate more than
+			// the envelope could hold.
+			if *header.Length < 0 || *header.Length > len(body) {
+				return items, fmt.Errorf("item length %d out of range", *header.Length)
+			}
 			payload = make([]byte, *header.Length)
 			if _, readErr := io.ReadFull(r, payload); readErr != nil {
 				return items, readErr
@@ -96,19 +102,27 @@ func ExtractEventSummary(item Item) Summary {
 	return Summary{Level: level, Message: msg}
 }
 
+// LogEntry is one record of a "log" item, with its own JSON.
+type LogEntry struct {
+	Summary
+	Payload []byte
+}
+
 // ExtractLogEntries reads a "log" item, which batches several records.
-func ExtractLogEntries(item Item) []Summary {
+func ExtractLogEntries(item Item) []LogEntry {
 	var l struct {
-		Items []struct {
-			Level string `json:"level"`
-			Body  string `json:"body"`
-		} `json:"items"`
+		Items []json.RawMessage `json:"items"`
 	}
 	json.Unmarshal(item.Payload, &l)
 
-	summaries := make([]Summary, 0, len(l.Items))
-	for _, entry := range l.Items {
-		summaries = append(summaries, Summary{Level: entry.Level, Message: entry.Body})
+	entries := make([]LogEntry, 0, len(l.Items))
+	for _, raw := range l.Items {
+		var e struct {
+			Level string `json:"level"`
+			Body  string `json:"body"`
+		}
+		_ = json.Unmarshal(raw, &e) // a malformed record is kept, with no summary
+		entries = append(entries, LogEntry{Summary{Level: e.Level, Message: e.Body}, raw})
 	}
-	return summaries
+	return entries
 }

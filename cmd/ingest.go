@@ -20,6 +20,10 @@ import (
 // maxEnvelopeBytes caps the decompressed size, guarding against gzip bombs.
 const maxEnvelopeBytes = 10 << 20
 
+// maxEventsPerEnvelope caps the rows one envelope can add: SDKs batch at
+// most 100 log records, and each record is a row of its own.
+const maxEventsPerEnvelope = 1000
+
 var sentryKeyPattern = regexp.MustCompile(`sentry_key=([a-zA-Z0-9]+)`)
 
 func sentryKey(r *http.Request) string {
@@ -124,7 +128,11 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 			return
 		}
 
+		saved := 0
 		save := func(kind string, sum ingest.Summary, payload []byte) {
+			if saved++; saved > maxEventsPerEnvelope {
+				return
+			}
 			if err := s.CreateTelemetryEvent(r.Context(), store.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload)}); err != nil {
 				fmt.Println("ingest: failed to store event:", err)
 			}
@@ -135,7 +143,7 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 				save("error", ingest.ExtractEventSummary(item), item.Payload)
 			case "log":
 				for _, entry := range ingest.ExtractLogEntries(item) {
-					save("log", entry, item.Payload)
+					save("log", entry.Summary, entry.Payload)
 				}
 			}
 		}

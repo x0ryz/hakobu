@@ -235,8 +235,15 @@ func AuthorizeURL(clientID, redirectURI, state string) string {
 	return "https://github.com/login/oauth/authorize?" + v.Encode()
 }
 
-// SignIn exchanges an OAuth callback code for the signed-in user's login.
-func SignIn(clientID, clientSecret, code, redirectURI string) (string, error) {
+// User is a GitHub account. ID never changes; Login can be renamed, and a
+// freed login can be taken by someone else.
+type User struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+}
+
+// SignIn exchanges an OAuth callback code for the signed-in user.
+func SignIn(clientID, clientSecret, code, redirectURI string) (User, error) {
 	form := url.Values{}
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
@@ -245,13 +252,13 @@ func SignIn(clientID, clientSecret, code, redirectURI string) (string, error) {
 
 	req, err := http.NewRequest("POST", "https://github.com/login/oauth/access_token", strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return User{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return User{}, err
 	}
 	defer resp.Body.Close()
 	var tok struct {
@@ -260,17 +267,18 @@ func SignIn(clientID, clientSecret, code, redirectURI string) (string, error) {
 		ErrorDescription string `json:"error_description"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-		return "", err
+		return User{}, err
 	}
 	if tok.AccessToken == "" {
-		return "", fmt.Errorf("github oauth error: %s (%s)", tok.Error, tok.ErrorDescription)
+		return User{}, fmt.Errorf("github oauth error: %s (%s)", tok.Error, tok.ErrorDescription)
 	}
 
-	var user struct {
-		Login string `json:"login"`
-	}
+	var user User
 	if err := call("GET", "https://api.github.com/user", tok.AccessToken, nil, http.StatusOK, &user); err != nil {
-		return "", err
+		return User{}, err
 	}
-	return user.Login, nil
+	if user.ID == 0 {
+		return User{}, fmt.Errorf("github returned no user ID")
+	}
+	return user, nil
 }

@@ -112,6 +112,7 @@ type GitHubApp struct {
 
 type Owner struct {
 	ID          int64
+	GitHubID    int64
 	GitHubLogin string
 }
 
@@ -129,9 +130,9 @@ type SealedVar struct {
 }
 
 type Session struct {
-	ID          string
-	GitHubLogin string
-	ExpiresAt   string
+	ID        string
+	GitHubID  int64
+	ExpiresAt string
 }
 
 type Storage struct {

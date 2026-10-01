@@ -190,17 +190,17 @@ func (q *Queries) CreateProject(ctx context.Context, name string) error {
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (id, github_login, expires_at) VALUES (?, ?, ?)
+INSERT INTO sessions (id, github_id, expires_at) VALUES (?, ?, ?)
 `
 
 type CreateSessionParams struct {
-	ID          string
-	GitHubLogin string
-	ExpiresAt   string
+	ID        string
+	GitHubID  int64
+	ExpiresAt string
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
-	_, err := q.db.ExecContext(ctx, createSession, arg.ID, arg.GitHubLogin, arg.ExpiresAt)
+	_, err := q.db.ExecContext(ctx, createSession, arg.ID, arg.GitHubID, arg.ExpiresAt)
 	return err
 }
 
@@ -610,14 +610,19 @@ func (q *Queries) GetGitHubApp(ctx context.Context) (GitHubApp, error) {
 }
 
 const getOwner = `-- name: GetOwner :one
-SELECT github_login FROM owner WHERE id = 1
+SELECT github_id, github_login FROM owner WHERE id = 1
 `
 
-func (q *Queries) GetOwner(ctx context.Context) (string, error) {
+type GetOwnerRow struct {
+	GitHubID    int64
+	GitHubLogin string
+}
+
+func (q *Queries) GetOwner(ctx context.Context) (GetOwnerRow, error) {
 	row := q.db.QueryRowContext(ctx, getOwner)
-	var github_login string
-	err := row.Scan(&github_login)
-	return github_login, err
+	var i GetOwnerRow
+	err := row.Scan(&i.GitHubID, &i.GitHubLogin)
+	return i, err
 }
 
 const getProject = `-- name: GetProject :one
@@ -643,13 +648,13 @@ func (q *Queries) GetProjectByID(ctx context.Context, id int64) (Project, error)
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT id, github_login, expires_at FROM sessions WHERE id = ?
+SELECT id, github_id, expires_at FROM sessions WHERE id = ?
 `
 
 func (q *Queries) GetSessionRow(ctx context.Context, id string) (Session, error) {
 	row := q.db.QueryRowContext(ctx, getSessionRow, id)
 	var i Session
-	err := row.Scan(&i.ID, &i.GitHubLogin, &i.ExpiresAt)
+	err := row.Scan(&i.ID, &i.GitHubID, &i.ExpiresAt)
 	return i, err
 }
 
@@ -1663,11 +1668,25 @@ func (q *Queries) SetGitHubWebhookSecret(ctx context.Context, webhookSecret secr
 }
 
 const setOwner = `-- name: SetOwner :exec
-INSERT INTO owner (id, github_login) VALUES (1, ?)
+INSERT INTO owner (id, github_id, github_login) VALUES (1, ?, ?)
 `
 
-func (q *Queries) SetOwner(ctx context.Context, githubLogin string) error {
-	_, err := q.db.ExecContext(ctx, setOwner, githubLogin)
+type SetOwnerParams struct {
+	GitHubID    int64
+	GitHubLogin string
+}
+
+func (q *Queries) SetOwner(ctx context.Context, arg SetOwnerParams) error {
+	_, err := q.db.ExecContext(ctx, setOwner, arg.GitHubID, arg.GitHubLogin)
+	return err
+}
+
+const setOwnerLogin = `-- name: SetOwnerLogin :exec
+UPDATE owner SET github_login = ? WHERE id = 1
+`
+
+func (q *Queries) SetOwnerLogin(ctx context.Context, githubLogin string) error {
+	_, err := q.db.ExecContext(ctx, setOwnerLogin, githubLogin)
 	return err
 }
 

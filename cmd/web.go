@@ -142,11 +142,11 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// The login is checked against the owner and allowlist on every
-			// request, so removing someone from the allowlist takes effect at once.
+			// The session's account is checked against the owner on every
+			// request, so a change of owner takes effect at once.
 			if c, err := r.Cookie(sessionCookie); err == nil {
-				if login, err := s.SessionLogin(r.Context(), c.Value); err == nil {
-					if mayAccess(r.Context(), s, login) {
+				if id, err := s.SessionUser(r.Context(), c.Value); err == nil {
+					if mayAccess(r.Context(), s, id) {
 						h(w, r)
 						return
 					}
@@ -542,7 +542,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		owner, _ := s.Owner(r.Context())
 		disk, diskLow := ops.DiskUsage()
 		data := map[string]any{
-			"PublicHost": config.PublicHost(), "Owner": owner,
+			"PublicHost": config.PublicHost(), "Owner": owner.GitHubLogin,
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 			"Rotation": ops.LastRotation(),
@@ -575,7 +575,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 	}
 
 	mux.HandleFunc("GET /setup", func(w http.ResponseWriter, r *http.Request) {
-		if owner, _ := s.Owner(r.Context()); owner != "" {
+		if owner, _ := s.Owner(r.Context()); owner.GitHubID != 0 {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -663,7 +663,7 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			deny("GitHub is not connected yet")
 			return
 		}
-		login, err := github.SignIn(app.ClientID, string(app.ClientSecret), r.URL.Query().Get("code"), "https://"+config.PublicHost()+"/auth/callback")
+		user, err := github.SignIn(app.ClientID, string(app.ClientSecret), r.URL.Query().Get("code"), "https://"+config.PublicHost()+"/auth/callback")
 		if err != nil {
 			fail(w, err)
 			return
@@ -674,27 +674,31 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 			fail(w, err)
 			return
 		}
-		if owner == "" {
+		if owner.GitHubID == 0 {
 			if !setupAllowed(r) {
 				deny("the panel has no owner yet, sign in through the installer's setup link")
 				return
 			}
-			if err := s.SetOwner(r.Context(), login); err != nil {
+			if err := s.SetOwner(r.Context(), store.SetOwnerParams{GitHubID: user.ID, GitHubLogin: user.Login}); err != nil {
 				fail(w, err)
 				return
 			}
 			config.ClearSetupToken()
 			setCookie(w, setupCookie, "", -1)
-			owner = login
+		} else if owner.GitHubID == user.ID && owner.GitHubLogin != user.Login {
+			// The owner renamed their account; the panel shows the new name.
+			if err := s.SetOwnerLogin(r.Context(), user.Login); err != nil {
+				fmt.Println("failed to update the owner's login:", err)
+			}
 		}
-		if !mayAccess(r.Context(), s, login) {
-			deny("GitHub account " + login + " has no access to this panel")
+		if !mayAccess(r.Context(), s, user.ID) {
+			deny("GitHub account " + user.Login + " has no access to this panel")
 			return
 		}
 
 		id, err := ops.RandomHex(32)
 		if err == nil {
-			err = s.NewSession(r.Context(), id, login, sessionTTL)
+			err = s.NewSession(r.Context(), id, user.ID, sessionTTL)
 		}
 		if err != nil {
 			fail(w, err)
@@ -780,8 +784,8 @@ func splitDomain(domain string, zones []string) (sub, zone string) {
 	return sub, zone
 }
 
-// mayAccess reports whether a GitHub login is the owner's.
-func mayAccess(ctx context.Context, s *store.Store, login string) bool {
+// mayAccess reports whether a GitHub user ID is the owner's.
+func mayAccess(ctx context.Context, s *store.Store, githubID int64) bool {
 	owner, err := s.Owner(ctx)
-	return err == nil && owner != "" && strings.EqualFold(login, owner)
+	return err == nil && owner.GitHubID != 0 && githubID == owner.GitHubID
 }
