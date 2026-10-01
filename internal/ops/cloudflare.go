@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
@@ -107,46 +106,34 @@ func TunnelReady(s *store.Store) bool {
 	return err == nil && cf.TunnelID != ""
 }
 
-func SaveCloudflareToken(s *store.Store, t cloudflare.Token) error {
-	return s.SaveCloudflareToken(ctx(), store.SaveCloudflareTokenParams{
-		AccessToken: secret.String(t.AccessToken), RefreshToken: secret.String(t.RefreshToken), ExpiresAt: t.ExpiresAt.UTC().Format(time.RFC3339),
-	})
+// ConnectCloudflare checks token and saves it, returning the domains it
+// sees; the tunnel and the panel's record keep working with a new token of
+// the same account.
+func ConnectCloudflare(s *store.Store, token string) ([]cloudflare.Zone, error) {
+	token = strings.TrimSpace(token)
+	zones, err := cloudflare.Client{Token: token}.CheckToken()
+	if err != nil {
+		return nil, err
+	}
+	if cf, err := s.GetCloudflare(ctx()); err == nil && cf.AccountID != "" {
+		same := false
+		for _, z := range zones {
+			same = same || z.Account.ID == cf.AccountID
+		}
+		if !same {
+			return nil, fmt.Errorf("the token is for another Cloudflare account than the one hakobu's tunnel is in")
+		}
+	}
+	return zones, s.SaveCloudflareToken(ctx(), secret.String(token))
 }
 
-// refreshMu serializes token refreshes: refresh tokens rotate, and using
-// one twice can get the whole grant revoked.
-var refreshMu sync.Mutex
-
-// cfClient returns an API client, refreshing the access token when it's
-// about to expire.
+// cfClient returns an API client with the saved token.
 func cfClient(s *store.Store) (cloudflare.Client, store.Cloudflare, error) {
-	return cfClientRefresh(s, false)
-}
-
-// cfClientRefresh with force gets new tokens even if the current ones are
-// fresh; the old refresh token stops working.
-func cfClientRefresh(s *store.Store, force bool) (cloudflare.Client, store.Cloudflare, error) {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
 	cf, err := s.GetCloudflare(ctx())
 	if err != nil {
 		return cloudflare.Client{}, cf, fmt.Errorf("Cloudflare is not connected")
 	}
-	exp, _ := time.Parse(time.RFC3339, cf.ExpiresAt)
-	if force || time.Until(exp) < time.Minute {
-		t, err := cloudflare.Refresh(config.CloudflareClientID, string(cf.RefreshToken))
-		if err != nil {
-			return cloudflare.Client{}, cf, fmt.Errorf("Cloudflare access expired; reconnect with `cd /opt/hakobu && sudo ./hakobu setup --reconnect`: %w", err)
-		}
-		if t.RefreshToken == "" {
-			t.RefreshToken = string(cf.RefreshToken)
-		}
-		if err := SaveCloudflareToken(s, t); err != nil {
-			return cloudflare.Client{}, cf, err
-		}
-		cf.AccessToken = secret.String(t.AccessToken)
-	}
-	return cloudflare.Client{Token: string(cf.AccessToken)}, cf, nil
+	return cloudflare.Client{Token: string(cf.ApiToken)}, cf, nil
 }
 
 func Zones(s *store.Store) ([]cloudflare.Zone, error) {

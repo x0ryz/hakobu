@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// R2 through the REST API with the OAuth token, so no S3 keys exist that
+// R2 through the REST API with hakobu's API token, so no S3 keys exist that
 // could leak. A single upload is capped at 300 MB; callers split larger
 // files.
 const MaxObjectSize = 300 << 20

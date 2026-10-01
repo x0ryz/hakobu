@@ -75,9 +75,7 @@ type Backup struct {
 
 type Cloudflare struct {
 	ID            int64
-	AccessToken   secret.String
-	RefreshToken  secret.String
-	ExpiresAt     string
+	ApiToken      secret.String
 	AccountID     string
 	TunnelID      string
 	TunnelToken   secret.String

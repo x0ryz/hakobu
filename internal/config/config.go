@@ -18,11 +18,6 @@ var (
 	BackupEvery    = envDuration("HAKOBU_BACKUP_EVERY", 24*time.Hour)
 	BackupKeep     = envInt("HAKOBU_BACKUP_KEEP", 7) // plus one a week for four weeks
 	RetentionDays  = envInt("HAKOBU_RETENTION_DAYS", 7)
-
-	// The Cloudflare OAuth client and the relay (relay/worker.js) that holds
-	// its callback until the installer that started the login fetches it.
-	CloudflareClientID = envString("HAKOBU_CF_CLIENT_ID", "c5ca0457d0d1133ae7921ddc56a83efc")
-	CloudflareRelay    = envString("HAKOBU_CF_RELAY", "https://hakobu.kaslauto.com")
 )
 
 const (

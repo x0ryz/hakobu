@@ -55,7 +55,7 @@ var secretColumns = map[string][]string{
 	"databases":   {"db_password"},
 	"storages":    {"secret_access_key"},
 	"github_app":  {"private_key", "webhook_secret", "client_secret"},
-	"cloudflare":  {"access_token", "refresh_token", "tunnel_token"},
+	"cloudflare":  {"api_token", "tunnel_token"},
 	"sealed_vars": {"value"},
 }
 

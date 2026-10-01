@@ -1,7 +1,6 @@
 package cloudflare
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,16 +12,62 @@ import (
 	"testing"
 )
 
-func TestPKCE(t *testing.T) {
-	verifier, challenge := PKCE()
-	sum := sha256.Sum256([]byte(verifier))
-	if len(verifier) < 43 || challenge != base64.RawURLEncoding.EncodeToString(sum[:]) {
-		t.Fatalf("bad PKCE pair %q %q", verifier, challenge)
+func TestTokenTemplateURL(t *testing.T) {
+	u, err := url.Parse(TokenTemplateURL("hakobu box"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	u, _ := url.Parse(AuthorizeURL("id", "https://relay/cf/callback", "st", challenge))
-	q := u.Query()
-	if q.Get("code_challenge_method") != "S256" || q.Get("scope") != scopes || q.Get("redirect_uri") != "https://relay/cf/callback" {
-		t.Errorf("authorize URL = %s", u)
+	if u.Host != "dash.cloudflare.com" || u.Query().Get("to") != "/:account/api-tokens" || u.Query().Get("name") != "hakobu box" {
+		t.Errorf("template URL = %s", u)
+	}
+	var perms []struct{ Key, Type string }
+	if err := json.Unmarshal([]byte(u.Query().Get("permissionGroupKeys")), &perms); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ Key, Type string }{{"zone", "read"}, {"dns", "edit"}, {"argotunnel", "edit"}, {"workers_r2", "edit"}}
+	if !slices.Equal(perms, want) {
+		t.Errorf("permissions = %v, want %v", perms, want)
+	}
+}
+
+func TestCheckToken(t *testing.T) {
+	var zones, tunnels string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			fmt.Fprint(w, `{"success":false,"errors":[{"message":"Invalid API Token"}]}`)
+			return
+		}
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/zones"):
+			fmt.Fprint(w, zones)
+		case strings.HasSuffix(r.URL.Path, "/cfd_tunnel"):
+			fmt.Fprint(w, tunnels)
+		}
+	}))
+	defer srv.Close()
+	old := APIURL
+	APIURL = srv.URL
+	defer func() { APIURL = old }()
+
+	ok := `{"success":true,"errors":[],"result":[]}`
+	denied := `{"success":false,"errors":[{"message":"Authentication error"}]}`
+	oneZone := `{"success":true,"errors":[],"result":[{"id":"z1","name":"example.com","account":{"id":"acc"}}]}`
+	for _, c := range []struct {
+		name, token, zones, tunnels, wantErr string
+	}{
+		{"works", "tok", oneZone, ok, ""},
+		{"bad token", "nope", oneZone, ok, "doesn't work"},
+		{"no zones", "tok", ok, ok, "sees no domains"},
+		{"no tunnel permission", "tok", oneZone, denied, "Cloudflare Tunnel Edit"},
+	} {
+		zones, tunnels = c.zones, c.tunnels
+		got, err := Client{Token: c.token}.CheckToken()
+		switch {
+		case c.wantErr == "" && (err != nil || len(got) != 1):
+			t.Errorf("%s: %v %v", c.name, got, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("%s: error %v, want %q", c.name, err, c.wantErr)
+		}
 	}
 }
 
@@ -40,6 +85,30 @@ func TestZoneFor(t *testing.T) {
 		if z.ID != want || ok != (want != "") {
 			t.Errorf("ZoneFor(%q) = %q, %v; want %q", host, z.ID, ok, want)
 		}
+	}
+}
+
+func TestRouteHostUpsert(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		if r.Method == "GET" {
+			fmt.Fprint(w, `{"success":true,"errors":[],"result":[{"id":"rec1","comment":"managed by hakobu"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"success":true,"errors":[],"result":{"id":"rec1"}}`)
+	}))
+	defer srv.Close()
+	old := APIURL
+	APIURL = srv.URL
+	defer func() { APIURL = old }()
+
+	id, err := Client{Token: "t"}.RouteHost("zone1", "hakobu.example.com", "tun9")
+	if err != nil || id != "rec1" {
+		t.Fatalf("id %q, err %v", id, err)
+	}
+	if len(calls) != 2 || !strings.HasPrefix(calls[0], "GET /zones/zone1/dns_records?") || !strings.HasPrefix(calls[1], "PUT /zones/zone1/dns_records/rec1?") {
+		t.Fatalf("calls %v", calls)
 	}
 }
 

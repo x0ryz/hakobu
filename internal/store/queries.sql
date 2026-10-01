@@ -269,8 +269,8 @@ DELETE FROM telemetry_events WHERE created_at < ?;
 SELECT * FROM cloudflare WHERE id = 1;
 
 -- name: SaveCloudflareToken :exec
-INSERT INTO cloudflare (id, access_token, refresh_token, expires_at) VALUES (1, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at;
+INSERT INTO cloudflare (id, api_token) VALUES (1, ?)
+ON CONFLICT(id) DO UPDATE SET api_token = excluded.api_token;
 
 -- name: SetBackupBucket :exec
 UPDATE cloudflare SET backup_bucket = ? WHERE id = 1;

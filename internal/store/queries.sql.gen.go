@@ -563,7 +563,7 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 
 const getCloudflare = `-- name: GetCloudflare :one
 
-SELECT id, access_token, refresh_token, expires_at, account_id, tunnel_id, tunnel_token, panel_zone_id, panel_record_id, backup_bucket FROM cloudflare WHERE id = 1
+SELECT id, api_token, account_id, tunnel_id, tunnel_token, panel_zone_id, panel_record_id, backup_bucket FROM cloudflare WHERE id = 1
 `
 
 // Cloudflare
@@ -572,9 +572,7 @@ func (q *Queries) GetCloudflare(ctx context.Context) (Cloudflare, error) {
 	var i Cloudflare
 	err := row.Scan(
 		&i.ID,
-		&i.AccessToken,
-		&i.RefreshToken,
-		&i.ExpiresAt,
+		&i.ApiToken,
 		&i.AccountID,
 		&i.TunnelID,
 		&i.TunnelToken,
@@ -1338,18 +1336,12 @@ func (q *Queries) PruneTelemetry(ctx context.Context, createdAt string) error {
 }
 
 const saveCloudflareToken = `-- name: SaveCloudflareToken :exec
-INSERT INTO cloudflare (id, access_token, refresh_token, expires_at) VALUES (1, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at
+INSERT INTO cloudflare (id, api_token) VALUES (1, ?)
+ON CONFLICT(id) DO UPDATE SET api_token = excluded.api_token
 `
 
-type SaveCloudflareTokenParams struct {
-	AccessToken  secret.String
-	RefreshToken secret.String
-	ExpiresAt    string
-}
-
-func (q *Queries) SaveCloudflareToken(ctx context.Context, arg SaveCloudflareTokenParams) error {
-	_, err := q.db.ExecContext(ctx, saveCloudflareToken, arg.AccessToken, arg.RefreshToken, arg.ExpiresAt)
+func (q *Queries) SaveCloudflareToken(ctx context.Context, apiToken secret.String) error {
+	_, err := q.db.ExecContext(ctx, saveCloudflareToken, apiToken)
 	return err
 }
 

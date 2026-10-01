@@ -6,9 +6,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
@@ -25,14 +25,11 @@ var setupCmd = &cobra.Command{
 }
 
 func init() {
-	setupCmd.Flags().BoolVar(&setupReconnect, "reconnect", false, "sign in to Cloudflare again")
+	setupCmd.Flags().BoolVar(&setupReconnect, "reconnect", false, "give hakobu a new Cloudflare API token")
 	rootCmd.AddCommand(setupCmd)
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	if config.CloudflareClientID == "" {
-		return fmt.Errorf("this build has no Cloudflare OAuth client (set HAKOBU_CF_CLIENT_ID)")
-	}
 	if err := config.PrepareDataDir(); err != nil {
 		return err
 	}
@@ -41,7 +38,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if setupReconnect || !ops.CloudflareConnected(s) {
-		if err := cloudflareLogin(s); err != nil {
+		if err := connectCloudflare(s); err != nil {
 			return err
 		}
 	}
@@ -87,40 +84,49 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// cloudflareLogin runs the OAuth login: the user authorizes in the browser,
-// Cloudflare hands the code to the relay, and this polls the relay for it.
-func cloudflareLogin(s *store.Store) error {
-	verifier, challenge := cloudflare.PKCE()
-	state, err := ops.RandomHex(24)
-	if err != nil {
+// connectCloudflare asks for an API token, through the dashboard form for
+// one with hakobu's permissions filled in, or takes CLOUDFLARE_API_TOKEN.
+func connectCloudflare(s *store.Store) error {
+	if token := os.Getenv("CLOUDFLARE_API_TOKEN"); token != "" {
+		_, err := ops.ConnectCloudflare(s, token)
 		return err
 	}
-	redirect := config.CloudflareRelay + "/cf/callback"
-	fmt.Println("\nOpen this link, sign in to Cloudflare and select Authorize:")
-	fmt.Println("\n  " + cloudflare.AuthorizeURL(config.CloudflareClientID, redirect, state, challenge))
-	fmt.Print("\nWaiting for authorization...")
-
-	deadline := time.Now().Add(10 * time.Minute)
-	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
-		code, ok, err := cloudflare.Poll(config.CloudflareRelay, state)
+	host, _ := os.Hostname()
+	fmt.Println("\nOpen this link, select Continue to summary and Create Token (the permissions are filled in):")
+	fmt.Println("\n  " + cloudflare.TokenTemplateURL("hakobu "+strings.Split(host, ".")[0]))
+	fmt.Println("\nCopy the token Cloudflare shows and paste it here (it isn't echoed).")
+	for attempt := 0; ; attempt++ {
+		fmt.Print("API token: ")
+		token, err := readSecret()
 		if err != nil {
-			fmt.Println()
 			return err
 		}
-		if !ok {
+		if strings.TrimSpace(token) == "" {
 			continue
 		}
-		token, err := cloudflare.Exchange(config.CloudflareClientID, redirect, code, verifier)
-		if err != nil {
-			fmt.Println()
-			return err
+		if _, err = ops.ConnectCloudflare(s, token); err == nil {
+			fmt.Println("Connected.")
+			return nil
 		}
-		fmt.Println(" connected.")
-		return ops.SaveCloudflareToken(s, token)
+		fmt.Println(err)
+		if attempt == 2 {
+			return fmt.Errorf("no working token; run `hakobu setup` again")
+		}
 	}
-	fmt.Println()
-	return fmt.Errorf("timed out waiting for Cloudflare authorization; run `hakobu setup` again")
+}
+
+// readSecret reads a line without echoing it when stdin is a terminal.
+func readSecret() (string, error) {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		return string(b), err
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return line, nil
 }
 
 func readLine(r *bufio.Reader) string {

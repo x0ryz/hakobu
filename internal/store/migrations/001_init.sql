@@ -151,14 +151,12 @@ CREATE TABLE telemetry_events (
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
--- The Cloudflare account connected through OAuth, the tunnel hakobu created
--- in it, the DNS record of the panel and the R2 bucket for database
--- backups ('' until backups are set up).
+-- The Cloudflare account hakobu reaches with the owner's API token, the
+-- tunnel hakobu created in it, the DNS record of the panel and the R2
+-- bucket for database backups ('' until backups are set up).
 CREATE TABLE cloudflare (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
-	access_token TEXT NOT NULL,
-	refresh_token TEXT NOT NULL,
-	expires_at TEXT NOT NULL,
+	api_token TEXT NOT NULL,
 	account_id TEXT NOT NULL DEFAULT '',
 	tunnel_id TEXT NOT NULL DEFAULT '',
 	tunnel_token TEXT NOT NULL DEFAULT '',

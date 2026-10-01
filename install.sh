@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs hakobu on a Linux server: connects your Cloudflare account (you
-# authorize in the browser), lets you pick the panel's domain and prints the
-# link to connect GitHub. Needs a domain on Cloudflare; the server needs no
+# create an API token from a prefilled link and paste it), lets you pick the
+# panel's domain and prints the link to connect GitHub. Needs a domain on Cloudflare; the server needs no
 # public IP or open ports.
 #
 # hakobu runs as the unprivileged user "hakobu" with its own rootless Docker,
@@ -12,7 +12,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo bash
 #
-# Optional: HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
+# Optional: CLOUDFLARE_API_TOKEN (skips the token prompt),
+#           HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
 #           HAKOBU_BINARY (install this local binary instead of downloading one)
 set -euo pipefail
 
@@ -188,7 +189,7 @@ echo "==> connecting Cloudflare"
 if [ -n "$ROOTFUL" ]; then
   (cd /opt/hakobu && ./hakobu setup) < /dev/tty
 else
-  (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DOCKER_HOST="unix://$HK_RUN/docker.sock" ./hakobu setup) < /dev/tty
+  (cd /opt/hakobu && runuser -u hakobu -- env HOME=/home/hakobu XDG_RUNTIME_DIR="$HK_RUN" DOCKER_HOST="unix://$HK_RUN/docker.sock" CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" ./hakobu setup) < /dev/tty
 fi
 
 if [ -n "$ROOTFUL" ]; then

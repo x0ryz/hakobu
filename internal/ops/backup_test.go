@@ -142,7 +142,7 @@ func TestR2Backups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveCloudflareToken(ctx(), store.SaveCloudflareTokenParams{AccessToken: "tok", RefreshToken: "r", ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}); err != nil {
+	if err := s.SaveCloudflareToken(ctx(), "tok"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveCloudflareTunnel(ctx(), store.SaveCloudflareTunnelParams{AccountID: "acc", TunnelID: "t"}); err != nil {

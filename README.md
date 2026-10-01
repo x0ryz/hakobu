@@ -35,10 +35,11 @@ The server needs no public IP or open ports: everything goes through a Cloudflar
 curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo bash
 ```
 
-1. The installer shows a Cloudflare link: sign in and select **Authorize**. Hakobu gets
-   permission to read your domains, manage their DNS records, create a tunnel and keep
-   database backups in R2.
-   Nothing to copy: the terminal continues on its own.
+1. The installer shows a Cloudflare link to a new API token with hakobu's permissions
+   filled in: read your domains, manage their DNS records, create a tunnel and keep
+   database backups in R2. Select **Continue to summary** → **Create Token**, copy the
+   token and paste it into the terminal (it isn't echoed). Or set `CLOUDFLARE_API_TOKEN`
+   before running the installer.
 2. Pick one of your domains from the list and the panel's subdomain (default `hakobu`).
    Hakobu creates the tunnel and a DNS record for the panel.
 3. Open the printed link, `https://hakobu.example.com/setup?token=…`, click
@@ -48,8 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo
 Every app then gets its own address in any domain of the account (`app.example.com`,
 `myapp.dev`, …); hakobu creates and removes the DNS records itself.
 
-Lost the setup link: `journalctl -u hakobu | grep setup`. Sign in to Cloudflare again:
-`cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
+Lost the setup link: `journalctl -u hakobu | grep setup`. Give hakobu a new Cloudflare
+token (after rolling it, say): `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
 
 Hakobu runs as the unprivileged `hakobu` user with its own
 [rootless Docker](https://docs.docker.com/engine/security/rootless/), so neither a break-in
@@ -57,12 +58,15 @@ into hakobu nor a container escape gets root on the server. Servers installed be
 keep running as root under the system Docker (their databases live there) and the installer
 only updates them; to move one to rootless Docker, install hakobu on a clean server.
 
-### OAuth relay
+### Why an API token, not "Sign in with Cloudflare"
 
-Cloudflare OAuth clients have one redirect URL while every hakobu server has its own
-address, so the login goes through a tiny Worker (`relay/`): it keeps the authorization
-code for up to five minutes until the installer that started the login fetches it.
-The code is useless without the PKCE verifier that stays on the server.
+Cloudflare's OAuth token endpoint sits behind the dashboard's bot protection, which
+challenges many server networks (Hetzner, DigitalOcean, VPNs; see
+[workers-sdk#11081](https://github.com/cloudflare/workers-sdk/issues/11081)). A server
+there can't trade the login code for tokens or refresh them, and doing it elsewhere would
+let a third party see your tokens. An API token goes straight from the dashboard to your
+server, never needs refreshing and works from any network. You can also limit it to the
+server's IP address in the dashboard (Client IP Address Filtering).
 
 ## Using it
 
@@ -107,8 +111,7 @@ sqlc generate
 - `internal/deploy/` — Docker Engine API client
 - `internal/proxy/` — per-app reverse proxy on `127.0.0.1:<port>` (private apps, fallback route)
 - `internal/edge/` — the panel's router: the panel, or an app the tunnel has no route for yet
-- `internal/cloudflare/` — Cloudflare OAuth + API (the tunnel's routes, DNS records, R2 backups)
-- `relay/` — Cloudflare Worker for the OAuth callback
+- `internal/cloudflare/` — Cloudflare API with the owner's token (the tunnel's routes, DNS records, R2 backups)
 - `internal/build/`, `internal/detect/` — cloning and building repos
 - `internal/github/` — GitHub App, OAuth
 - `internal/store/` — SQLite: migrations, sqlc queries

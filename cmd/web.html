@@ -598,7 +598,7 @@
     <p class="text-sm text-dim">Every database is backed up daily to the R2 bucket <span class="mono">{{.BackupBucket}}</span> in your Cloudflare account. Its files can't be deleted or overwritten for 7 days, not even by hakobu, so a broken or compromised server can't wipe recent backups.</p>
     {{else}}
     <p class="text-sm text-dim">Creates a private R2 bucket in your Cloudflare account and backs up every database to it daily. Backups live off this server, so they survive losing it. R2's free plan includes 10 GB.</p>
-    {{if not .CloudflareConnected}}<p class="text-xs text-faint">Needs Cloudflare connected first: <span class="mono">cd /opt/hakobu && sudo ./hakobu setup</span>.</p>{{end}}
+    {{if not .CloudflareConnected}}<p class="text-xs text-faint">Needs Cloudflare connected first: <span class="mono">cd /opt/hakobu && sudo -u hakobu ./hakobu setup</span>.</p>{{end}}
     {{end}}
   </div>
 
@@ -607,7 +607,7 @@
       <h2 class="h2">Security</h2>
       <button hx-post="/settings/rotate-secrets" hx-confirm="Replace every secret hakobu can replace? Apps restart with the new values, the panel and apps are unreachable for a few seconds while the tunnel reconnects, and everyone (you too) has to sign in again." class="btn-danger" {{if .Rotation.Running}}disabled{{end}}>Replace all secrets</button>
     </div>
-    <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret, Cloudflare tokens and tunnel token, restarts the apps with them, signs everyone out and rotates the master key. It then lists what only you can replace.</p>
+    <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret and Cloudflare tunnel token, restarts the apps with them, signs everyone out and rotates the master key. It then lists what only you can replace.</p>
     <p class="text-xs text-faint">Secrets are encrypted in the database with <span class="mono">data/master.key</span>: back it up together with <span class="mono">data/hakobu.db</span>, or the secrets in a copy can't be read.</p>
     {{with .Rotation}}{{if .Started}}
     <div class="space-y-2">

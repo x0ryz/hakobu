@@ -16,7 +16,7 @@ import (
 )
 
 // Backups go to one R2 bucket in the connected Cloudflare account, written
-// through the REST API with hakobu's OAuth token: no S3 keys exist for it,
+// through the REST API with hakobu's Cloudflare API token: no S3 keys exist for it,
 // so nothing an app holds can reach the backups. The bucket's lock keeps
 // every file for backupLockDays, even from hakobu itself.
 const backupLockDays = 7

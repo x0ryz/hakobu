@@ -93,14 +93,13 @@ func rotateSecrets(s *store.Store, out io.Writer) (manual []string, failures int
 		manual = append(manual, fmt.Sprintf("GitHub App %s: generate a new private key and client secret at https://github.com/settings/apps/%s (hakobu can't replace them itself)", app.Slug, app.Slug))
 	}
 
-	// Cloudflare: new OAuth tokens (the old refresh token stops working)
-	// and a new tunnel secret, which disconnects any other connector.
+	// Cloudflare: a new tunnel secret, which disconnects any other
+	// connector. The API token is the owner's to roll.
 	if CloudflareConnected(s) {
-		_, _, err := cfClientRefresh(s, true)
-		step("Cloudflare sign-in tokens", err)
 		if TunnelReady(s) {
 			step("tunnel token (other connectors were disconnected)", rotateTunnel(s))
 		}
+		manual = append(manual, "Cloudflare API token: roll it in the Cloudflare dashboard (Manage Account → API Tokens → Roll) and give hakobu the new one with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`")
 	}
 
 	// Databases: new passwords; their apps get them on restart.

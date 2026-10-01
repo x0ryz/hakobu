@@ -1,12 +1,18 @@
-// Package cloudflare connects hakobu to a Cloudflare account through OAuth
-// (authorization code + PKCE, no client secret) and manages the tunnel and
-// DNS records hakobu needs.
+// Package cloudflare connects hakobu to a Cloudflare account through an API
+// token the owner creates for it and manages the tunnel and DNS records
+// hakobu needs.
+//
+// Not OAuth: Cloudflare's token endpoint lives on dash.cloudflare.com,
+// whose bot protection challenges many server networks (Hetzner,
+// DigitalOcean, VPNs), so a server can't trade codes or refresh tokens
+// itself, and doing it elsewhere means a third party sees the tokens. The
+// API (api.cloudflare.com) isn't challenged, and an API token needs no
+// refreshing.
 package cloudflare
 
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,110 +20,52 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
-)
-
-const (
-	authURL  = "https://dash.cloudflare.com/oauth2/auth"
-	tokenURL = "https://dash.cloudflare.com/oauth2/token"
-	// R2 holds the database backups: buckets (workers-r2) and their files
-	// (workers-r2-bucket-item).
-	scopes = "zone.read dns.write argotunnel.write workers-r2.write workers-r2-bucket-item.write offline_access"
 )
 
 // APIURL is the API's base; tests point it at a fake.
 var APIURL = "https://api.cloudflare.com/client/v4"
 
-// PKCE returns a random code verifier and its S256 challenge.
-func PKCE() (verifier, challenge string) {
-	b := make([]byte, 32)
-	rand.Read(b)
-	verifier = base64.RawURLEncoding.EncodeToString(b)
-	sum := sha256.Sum256([]byte(verifier))
-	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
+// tokenPermissions are what hakobu needs: the account's domains, their DNS
+// records, a tunnel, and R2 for the database backups.
+var tokenPermissions = []struct{ Key, Type string }{
+	{"zone", "read"},
+	{"dns", "edit"},
+	{"argotunnel", "edit"},
+	{"workers_r2", "edit"},
 }
 
-func AuthorizeURL(clientID, redirectURI, state, challenge string) string {
-	v := url.Values{}
-	v.Set("response_type", "code")
-	v.Set("client_id", clientID)
-	v.Set("redirect_uri", redirectURI)
-	v.Set("scope", scopes)
-	v.Set("state", state)
-	v.Set("code_challenge", challenge)
-	v.Set("code_challenge_method", "S256")
-	return authURL + "?" + v.Encode()
+// TokenTemplateURL opens the dashboard's form for a new account-owned API
+// token with hakobu's permissions filled in; name is the token's name.
+func TokenTemplateURL(name string) string {
+	perms, _ := json.Marshal(func() []map[string]string {
+		var out []map[string]string
+		for _, p := range tokenPermissions {
+			out = append(out, map[string]string{"key": p.Key, "type": p.Type})
+		}
+		return out
+	}())
+	return "https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=" +
+		url.QueryEscape(string(perms)) + "&name=" + strings.ReplaceAll(url.QueryEscape(name), "+", "%20")
 }
 
-type Token struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-}
-
-// Exchange trades an authorization code for tokens.
-func Exchange(clientID, redirectURI, code, verifier string) (Token, error) {
-	return tokenRequest(url.Values{
-		"grant_type":    {"authorization_code"},
-		"client_id":     {clientID},
-		"redirect_uri":  {redirectURI},
-		"code":          {code},
-		"code_verifier": {verifier},
-	})
-}
-
-func Refresh(clientID, refreshToken string) (Token, error) {
-	return tokenRequest(url.Values{
-		"grant_type":    {"refresh_token"},
-		"client_id":     {clientID},
-		"refresh_token": {refreshToken},
-	})
-}
-
-func tokenRequest(form url.Values) (Token, error) {
-	resp, err := http.PostForm(tokenURL, form)
+// CheckToken tells what the token can't do of what hakobu needs, as
+// advice for the owner; it only reads, so DNS editing and R2 show up when
+// first used.
+func (c Client) CheckToken() ([]Zone, error) {
+	zones, err := c.Zones()
 	if err != nil {
-		return Token{}, err
+		return nil, fmt.Errorf("the token doesn't work: %w", err)
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var res struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
+	if len(zones) == 0 {
+		return nil, fmt.Errorf("the token sees no domains: give it Zone Read and DNS Edit for all zones of the account")
 	}
-	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &res) != nil || res.AccessToken == "" {
-		return Token{}, fmt.Errorf("cloudflare token request failed (%d): %s", resp.StatusCode, body)
+	if err := c.call("GET", "/accounts/"+zones[0].Account.ID+"/cfd_tunnel?per_page=1", nil, nil); err != nil {
+		return nil, fmt.Errorf("the token can't manage tunnels: give it Cloudflare Tunnel Edit (%w)", err)
 	}
-	return Token{
-		AccessToken:  res.AccessToken,
-		RefreshToken: res.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(res.ExpiresIn) * time.Second),
-	}, nil
+	return zones, nil
 }
 
-// Poll asks the relay for the result of the login started with state; ok is
-// false while the user hasn't authorized yet.
-func Poll(relay, state string) (code string, ok bool, err error) {
-	resp, err := http.Get(relay + "/cf/poll?state=" + url.QueryEscape(state))
-	if err != nil {
-		return "", false, nil // transient, keep polling
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return "", false, nil
-	}
-	var res struct{ Code, Error string }
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil || resp.StatusCode != http.StatusOK {
-		return "", false, fmt.Errorf("relay %s answered %d", relay, resp.StatusCode)
-	}
-	if res.Error != "" {
-		return "", false, fmt.Errorf("Cloudflare login failed: %s", res.Error)
-	}
-	return res.Code, true, nil
-}
-
-// Client calls the Cloudflare API with an OAuth access token.
+// Client calls the Cloudflare API with an API token.
 type Client struct{ Token string }
 
 func (c Client) call(method, path string, in, out any) error {
@@ -250,8 +198,34 @@ func (c Client) SetIngress(accountID, tunnelID string, rules []IngressRule) erro
 		map[string]any{"config": map[string]any{"ingress": rules}}, nil)
 }
 
-// RouteHost points host at the tunnel with a proxied CNAME and returns the record ID.
+// RouteHost points host at the tunnel with a proxied CNAME and returns the
+// record ID. A record hakobu created before (a retried setup) is moved to
+// the new tunnel; someone else's record is left alone with an error.
 func (c Client) RouteHost(zoneID, host, tunnelID string) (string, error) {
+	var existing []struct {
+		ID      string `json:"id"`
+		Comment string `json:"comment"`
+	}
+	if err := c.call("GET", "/zones/"+zoneID+"/dns_records?name="+url.QueryEscape(host), nil, &existing); err != nil {
+		return "", err
+	}
+	for _, r := range existing {
+		if r.Comment != "managed by hakobu" {
+			return "", fmt.Errorf("%s: a DNS record that hakobu didn't create already exists (remove it in Cloudflare first)", host)
+		}
+	}
+	if len(existing) > 0 {
+		var rec struct {
+			ID string `json:"id"`
+		}
+		err := c.call("PUT", "/zones/"+zoneID+"/dns_records/"+existing[0].ID, map[string]any{
+			"type": "CNAME", "name": host, "content": tunnelID + ".cfargotunnel.com", "proxied": true, "comment": "managed by hakobu",
+		}, &rec)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", host, err)
+		}
+		return rec.ID, nil
+	}
 	var rec struct {
 		ID string `json:"id"`
 	}
