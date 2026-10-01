@@ -51,3 +51,11 @@ sql:
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
           - column: sealed_vars.value
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: workers.command
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: deploy_logs.output
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: telemetry_events.message
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: telemetry_events.payload
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}

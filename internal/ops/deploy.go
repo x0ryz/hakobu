@@ -16,6 +16,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/github"
 	"github.com/x0ryz/hakobu/internal/proxy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -79,7 +80,7 @@ func (l *deployLog) Write(p []byte) (int, error) {
 	defer l.mu.Unlock()
 	l.buf.Write(p)
 	if time.Since(l.flushed) > time.Second {
-		l.s.UpdateDeployLog(ctx(), store.UpdateDeployLogParams{ID: l.id, Status: "running", Output: l.buf.String()})
+		_ = l.s.UpdateDeployLog(ctx(), store.UpdateDeployLogParams{ID: l.id, Status: "running", Output: secret.String(l.buf.String())})
 		l.flushed = time.Now()
 	}
 	return len(p), nil
@@ -93,7 +94,7 @@ func (l *deployLog) finish(err error) {
 		status = "failed"
 		fmt.Fprintln(&l.buf, "error:", err)
 	}
-	l.s.UpdateDeployLog(ctx(), store.UpdateDeployLogParams{ID: l.id, Status: status, Output: l.buf.String()})
+	_ = l.s.UpdateDeployLog(ctx(), store.UpdateDeployLogParams{ID: l.id, Status: status, Output: secret.String(l.buf.String())})
 }
 
 // startJob runs fn in the background with a deploy log; only one job per
@@ -302,7 +303,7 @@ func undoDataRollback(s *store.Store, app store.App, current string, out io.Writ
 		}
 	}
 	if err != nil {
-		keep := filepath.Join(snapshotDir, app.Name+"-before-rollback.sql.gz")
+		keep := filepath.Join(snapshotDir, app.Name+"-before-rollback"+snapshotExt)
 		if rerr := os.Rename(current, keep); rerr != nil {
 			keep = current
 		}
@@ -566,7 +567,7 @@ func runWorker(s *store.Store, app store.App, w store.Worker, out io.Writer) err
 		return err
 	}
 	fmt.Fprintln(out, "starting worker", w.ContainerName())
-	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), w.Command, appOptions(app, env, binds))
+	_, err = deploy.RunWorkerContainer(ctx(), ImageTag(app), w.ContainerName(), string(w.Command), appOptions(app, env, binds))
 	return err
 }
 
@@ -581,7 +582,7 @@ func SaveWorker(s *store.Store, w store.Worker) error {
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(w.Command) == "" {
+	if strings.TrimSpace(string(w.Command)) == "" {
 		return fmt.Errorf("worker command is required")
 	}
 	if err := checkNotSealed(s, "worker", w.AppName, string(w.Env)); err != nil {

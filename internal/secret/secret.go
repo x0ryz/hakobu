@@ -199,6 +199,22 @@ func loadedKeys() ([]key, error) {
 	return keys, nil
 }
 
+// KeyMissing reports whether path holds no key, none comes from
+// HAKOBU_MASTER_KEY and none is loaded yet: LoadKey would make a new one.
+func KeyMissing(path string) bool {
+	if os.Getenv(envKey) != "" {
+		return false
+	}
+	mu.RLock()
+	loaded := keys != nil
+	mu.RUnlock()
+	if loaded {
+		return false
+	}
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
+}
+
 // IsEncrypted reports whether a stored value is already encrypted.
 func IsEncrypted(stored string) bool { return strings.HasPrefix(stored, prefix) }
 

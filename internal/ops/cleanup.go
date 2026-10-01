@@ -85,7 +85,7 @@ func cleanup(s *store.Store) (string, error) {
 	// copy saved by a failed rollback stays until someone deals with it.
 	if snaps, err := os.ReadDir(snapshotDir); err == nil {
 		for _, f := range snaps {
-			name, isSnapshot := strings.CutSuffix(f.Name(), ".sql.gz")
+			name, isSnapshot := strings.CutSuffix(f.Name(), snapshotExt)
 			info, err := f.Info()
 			stale := err == nil && time.Since(info.ModTime()) > 24*time.Hour
 			if (isSnapshot && !exists[name] && !strings.HasSuffix(name, "-before-rollback")) || (strings.HasSuffix(f.Name(), ".tmp") && stale) {

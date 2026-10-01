@@ -96,7 +96,7 @@ type DeployLog struct {
 	AppName   string
 	Trigger   string
 	Status    string
-	Output    string
+	Output    secret.String
 	CreatedAt string
 }
 
@@ -151,8 +151,8 @@ type TelemetryEvent struct {
 	AppName   string
 	Kind      string
 	Level     string
-	Message   string
-	Payload   string
+	Message   secret.String
+	Payload   secret.String
 	CreatedAt string
 }
 
@@ -165,6 +165,6 @@ type Volume struct {
 type Worker struct {
 	AppName string
 	Name    string
-	Command string
+	Command secret.String
 	Env     secret.String
 }

@@ -35,6 +35,9 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	s := &Store{Queries: New(db), db: db, keyPath: filepath.Join(filepath.Dir(path), "master.key")}
+	if err := checkKeyNotLost(db, s.keyPath, secret.KeyMissing(s.keyPath)); err != nil {
+		return nil, err
+	}
 	if err := secret.LoadKey(s.keyPath); err != nil {
 		return nil, fmt.Errorf("master key: %w", err)
 	}
@@ -46,17 +49,41 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// checkKeyNotLost refuses a missing master key while the database holds
+// secrets: a new key would leave every one of them unreadable.
+func checkKeyNotLost(db *sql.DB, keyPath string, missing bool) error {
+	if !missing {
+		return nil
+	}
+	for table, cols := range secretColumns {
+		for _, col := range cols {
+			var any bool
+			if err := db.QueryRow(fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s WHERE %s != '')`, table, col)).Scan(&any); err != nil {
+				return err
+			}
+			if any {
+				return fmt.Errorf("%s is missing, but the database holds secrets encrypted with it (%s.%s): put the key back or set HAKOBU_MASTER_KEY; hakobu won't start with a new key that can't read them", keyPath, table, col)
+			}
+		}
+	}
+	return nil
+}
+
 // secretColumns are the columns sqlc maps to secret.String (sqlc.yaml);
 // TestSecretColumnsMatchSqlc keeps the two in step.
 var secretColumns = map[string][]string{
 	"projects":    {"shared_env"},
 	"apps":        {"env", "sentry_key"},
-	"workers":     {"env"},
+	"workers":     {"env", "command"},
 	"databases":   {"db_password"},
 	"storages":    {"secret_access_key"},
 	"github_app":  {"private_key", "webhook_secret", "client_secret"},
 	"cloudflare":  {"api_token", "tunnel_token"},
 	"sealed_vars": {"value"},
+	// Apps' errors, logs and traces (they may hold their users' data) and
+	// build output (scripts print secrets now and then).
+	"telemetry_events": {"message", "payload"},
+	"deploy_logs":      {"output"},
 }
 
 // RotateMasterKey encrypts every secret with a new master key, so a copy
@@ -114,7 +141,20 @@ func (s *Store) finishRotation() error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.rewrapSealedFiles()
 	return secret.FinishRotation(s.keyPath)
+}
+
+// rewrapSealedFiles moves the database snapshots next to the database
+// (data/snapshots, sealed by ops) to the new key while both keys are
+// loaded. A file that fails only costs that undo, not the rotation.
+func (s *Store) rewrapSealedFiles() {
+	files, _ := filepath.Glob(filepath.Join(filepath.Dir(s.keyPath), "snapshots", "*.enc"))
+	for _, f := range files {
+		if err := secret.RewrapFile(f); err != nil {
+			fmt.Println("master key rotation: snapshot", filepath.Base(f), "can't be read after it:", err)
+		}
+	}
 }
 
 func (a App) ContainerName() string {
@@ -127,6 +167,22 @@ func (a App) ContainerName() string {
 
 func (w Worker) ContainerName() string {
 	return w.AppName + "-worker"
+}
+
+// FailRunningDeployLogs marks the deploys a restart cut short as failed.
+// The output is encrypted, so the note is appended here, not in SQL.
+func (s *Store) FailRunningDeployLogs(ctx context.Context) error {
+	logs, err := s.ListRunningDeployLogs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, l := range logs {
+		out := string(l.Output) + "\ninterrupted: agent restarted"
+		if err := s.UpdateDeployLog(ctx, UpdateDeployLogParams{ID: l.ID, Status: "failed", Output: secret.String(out)}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteAppCascade removes the app with its worker, volumes, deploy logs and telemetry.

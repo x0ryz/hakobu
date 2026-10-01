@@ -21,8 +21,10 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Sign-in with GitHub only**, for the owner: the GitHub account that claimed the panel with the setup link.
 - **Cloudflare Tunnel**: panel and apps on your domain with HTTPS, no open ports. cloudflared runs in its own
   container and sends app traffic straight to the app's container, so restarting or upgrading hakobu doesn't take apps down.
-- **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens are encrypted in the SQLite
-  database with a key in `data/master.key` (keep it with any copy of the database; without it they can't be read).
+- **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens, but also build logs, worker
+  commands and your apps' errors and logs, are encrypted in the SQLite database with a key in `data/master.key`; the
+  database snapshots kept for Rollback are sealed with it too. Keep the key with any copy of `data/`: without it
+  nothing secret can be read, and hakobu refuses to start rather than make a new key over data it can't read.
 - **Keeps the disk in check**: each app keeps only its live image and one for rollback; unused build cache is dropped daily.
 - Single Go binary + SQLite. Needs only Docker, which the installer sets up rootless.
 

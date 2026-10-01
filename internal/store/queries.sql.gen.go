@@ -247,8 +247,8 @@ type CreateTelemetryEventParams struct {
 	AppName string
 	Kind    string
 	Level   string
-	Message string
-	Payload string
+	Message secret.String
+	Payload secret.String
 }
 
 // Telemetry
@@ -420,15 +420,6 @@ DELETE FROM workers WHERE app_name = ?
 
 func (q *Queries) DeleteWorker(ctx context.Context, appName string) error {
 	_, err := q.db.ExecContext(ctx, deleteWorker, appName)
-	return err
-}
-
-const failRunningDeployLogs = `-- name: FailRunningDeployLogs :exec
-UPDATE deploy_logs SET status = 'failed', output = output || char(10) || 'interrupted: agent restarted' WHERE status = 'running'
-`
-
-func (q *Queries) FailRunningDeployLogs(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, failRunningDeployLogs)
 	return err
 }
 
@@ -1139,6 +1130,38 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	return items, nil
 }
 
+const listRunningDeployLogs = `-- name: ListRunningDeployLogs :many
+SELECT id, output FROM deploy_logs WHERE status = 'running'
+`
+
+type ListRunningDeployLogsRow struct {
+	ID     int64
+	Output secret.String
+}
+
+func (q *Queries) ListRunningDeployLogs(ctx context.Context) ([]ListRunningDeployLogsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRunningDeployLogs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunningDeployLogsRow
+	for rows.Next() {
+		var i ListRunningDeployLogsRow
+		if err := rows.Scan(&i.ID, &i.Output); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSealedVars = `-- name: ListSealedVars :many
 SELECT scope, owner, "key", value FROM sealed_vars WHERE scope = ? AND owner = ? ORDER BY key
 `
@@ -1405,7 +1428,7 @@ ON CONFLICT(app_name) DO UPDATE SET name = excluded.name, command = excluded.com
 type SaveWorkerParams struct {
 	AppName string
 	Name    string
-	Command string
+	Command secret.String
 	Env     secret.String
 }
 
@@ -1701,7 +1724,7 @@ UPDATE deploy_logs SET status = ?, output = ? WHERE id = ?
 
 type UpdateDeployLogParams struct {
 	Status string
-	Output string
+	Output secret.String
 	ID     int64
 }
 

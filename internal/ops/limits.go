@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -52,7 +53,7 @@ func WatchOOM(s *store.Store) {
 			}
 			if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
 				AppName: app.Name, Kind: "oom", Level: "fatal",
-				Message: fmt.Sprintf("%s %s. Docker restarts it.", container, reason),
+				Message: secret.String(fmt.Sprintf("%s %s. Docker restarts it.", container, reason)),
 			}); err != nil {
 				fmt.Println("failed to record an out-of-memory kill of", container+":", err)
 			}

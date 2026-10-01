@@ -237,8 +237,8 @@ UPDATE deploy_logs SET status = ?, output = ? WHERE id = ?;
 -- name: ListDeployLogs :many
 SELECT * FROM deploy_logs WHERE app_name = ? ORDER BY id DESC LIMIT ?;
 
--- name: FailRunningDeployLogs :exec
-UPDATE deploy_logs SET status = 'failed', output = output || char(10) || 'interrupted: agent restarted' WHERE status = 'running';
+-- name: ListRunningDeployLogs :many
+SELECT id, output FROM deploy_logs WHERE status = 'running';
 
 -- name: DeleteDeployLogsOfApp :exec
 DELETE FROM deploy_logs WHERE app_name = ?;

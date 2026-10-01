@@ -469,7 +469,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		return "", ops.SaveWorker(s, store.Worker{
 			AppName: r.PathValue("a"),
 			Name:    strings.TrimSpace(r.FormValue("name")),
-			Command: strings.TrimSpace(r.FormValue("command")),
+			Command: secret.String(strings.TrimSpace(r.FormValue("command"))),
 			Env:     secret.String(r.FormValue("env")),
 		})
 	})

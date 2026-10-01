@@ -432,7 +432,7 @@ func TestDockerDataRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitIdle(t, a.Name)
-	if logs, _ := s.ListDeployLogs(ctx(), store.ListDeployLogsParams{AppName: a.Name, Limit: 1}); logs[0].Status != "failed" || !strings.Contains(logs[0].Output, "put the current data back") {
+	if logs, _ := s.ListDeployLogs(ctx(), store.ListDeployLogsParams{AppName: a.Name, Limit: 1}); logs[0].Status != "failed" || !strings.Contains(string(logs[0].Output), "put the current data back") {
 		t.Errorf("failed rollback:\n%s", logs[0].Output)
 	}
 	if err := s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: a.Name, HealthCheckPath: "/"}); err != nil {

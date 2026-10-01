@@ -608,7 +608,7 @@
       <button hx-post="/settings/rotate-secrets" hx-confirm="Replace every secret hakobu can replace? Apps restart with the new values, the panel and apps are unreachable for a few seconds while the tunnel reconnects, and everyone (you too) has to sign in again." class="btn-danger" {{if .Rotation.Running}}disabled{{end}}>Replace all secrets</button>
     </div>
     <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret and Cloudflare tunnel token, restarts the apps with them, signs everyone out and rotates the master key. It then lists what only you can replace.</p>
-    <p class="text-xs text-faint">Secrets are encrypted in the database with <span class="mono">data/master.key</span>: back it up together with <span class="mono">data/hakobu.db</span>, or the secrets in a copy can't be read.</p>
+    <p class="text-xs text-faint">Secrets, logs and the apps' errors are encrypted in the database with <span class="mono">data/master.key</span>, and so are the database snapshots for Rollback: back the key up together with <span class="mono">data/</span>, or a copy can't be read.</p>
     {{with .Rotation}}{{if .Started}}
     <div class="space-y-2">
       <p class="text-sm {{if .Running}}text-dim{{else if .Failures}}text-bad{{else}}text-good{{end}}">{{if .Running}}Replacing secrets (started {{.Started}})…{{else if .Failures}}Finished with {{.Failures}} failure(s), started {{.Started}}.{{else}}All replaced, started {{.Started}}.{{end}}</p>

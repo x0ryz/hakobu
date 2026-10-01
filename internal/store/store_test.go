@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -257,5 +258,127 @@ func TestSecretColumnsMatchSqlc(t *testing.T) {
 	}
 	for col := range listed {
 		t.Errorf("%s is in secretColumns but not a secret in sqlc.yaml", col)
+	}
+}
+
+// Logs, errors and worker commands are stored encrypted like the other
+// secrets, and a deploy cut short by a restart is still closed with a note.
+func TestLogsEncryptedAtRest(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateProject(ctx, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.GetProject(ctx, "demo")
+	if err := s.CreateApp(ctx, CreateAppParams{ProjectID: p.ID, Name: "web", Repo: "o/r", BuildStrategy: "railpack"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTelemetryEvent(ctx, CreateTelemetryEventParams{AppName: "web", Kind: "error", Level: "error", Message: "user alice@example.com", Payload: `{"ip":"203.0.113.9"}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveWorker(ctx, SaveWorkerParams{AppName: "web", Name: "w", Command: "worker --token=hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.CreateDeployLog(ctx, CreateDeployLogParams{AppName: "web", Trigger: "push", Status: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateDeployLog(ctx, UpdateDeployLogParams{ID: id, Status: "running", Output: "building with TOKEN=hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, q := range []string{
+		`SELECT message || payload FROM telemetry_events`,
+		`SELECT command FROM workers`,
+		`SELECT output FROM deploy_logs`,
+	} {
+		var raw string
+		if err := s.db.QueryRow(q).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw, "hunter2") || strings.Contains(raw, "alice") || strings.Contains(raw, "203.0.113") {
+			t.Errorf("%s: plaintext stored: %q", q, raw)
+		}
+	}
+
+	if err := s.FailRunningDeployLogs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := s.ListDeployLogs(ctx, ListDeployLogsParams{AppName: "web", Limit: 1})
+	if err != nil || len(logs) != 1 {
+		t.Fatal(logs, err)
+	}
+	if logs[0].Status != "failed" || string(logs[0].Output) != "building with TOKEN=hunter2\ninterrupted: agent restarted" {
+		t.Errorf("interrupted deploy = %s %q", logs[0].Status, logs[0].Output)
+	}
+}
+
+func TestMissingKeyWithSecrets(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "hakobu.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkKeyNotLost(s.db, "data/master.key", true); err != nil {
+		t.Errorf("an empty database needs no old key: %v", err)
+	}
+	if err := s.SaveCloudflareToken(ctx, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	err = checkKeyNotLost(s.db, "data/master.key", true)
+	if err == nil || !strings.Contains(err.Error(), "cloudflare.api_token") {
+		t.Errorf("a missing key over secrets: %v, want a refusal naming the column", err)
+	}
+	if err := checkKeyNotLost(s.db, "data/master.key", false); err != nil {
+		t.Errorf("key present: %v", err)
+	}
+}
+
+// The database snapshots ops seals next to the database stay readable
+// after the master key is rotated.
+func TestRotationRewrapsSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := filepath.Join(dir, "snapshots", "web.sql.gz.enc")
+	if err := os.MkdirAll(filepath.Dir(snap), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := secret.NewFileWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("dump")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if err := s.RotateMasterKey(); err != nil {
+		t.Fatal(err)
+	}
+	f, err = os.Open(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	r, err := secret.NewFileReader(f)
+	if err != nil {
+		t.Fatalf("snapshot after rotation: %v", err)
+	}
+	if b, err := io.ReadAll(r); err != nil || string(b) != "dump" {
+		t.Errorf("snapshot after rotation = %q, %v", b, err)
 	}
 }

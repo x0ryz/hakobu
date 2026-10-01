@@ -13,6 +13,7 @@ import (
 
 	"github.com/x0ryz/hakobu/internal/ingest"
 	"github.com/x0ryz/hakobu/internal/ops"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -124,7 +125,7 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 
 		save := func(kind string, sum ingest.Summary, payload []byte) {
-			if err := s.CreateTelemetryEvent(r.Context(), store.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: sum.Message, Payload: string(payload)}); err != nil {
+			if err := s.CreateTelemetryEvent(r.Context(), store.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload)}); err != nil {
 				fmt.Println("ingest: failed to store event:", err)
 			}
 		}

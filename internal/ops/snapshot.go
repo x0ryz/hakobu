@@ -9,19 +9,25 @@ import (
 
 	"github.com/x0ryz/hakobu/internal/backup"
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
 // Snapshots: before each deploy the app's database is dumped to the local
 // disk, next to the :previous image, so Rollback can return the data a bad
 // migration broke together with the code. It's an undo, not a backup: it
-// lives on this server and only the last one is kept.
+// lives on this server and only the last one is kept. Dumps are sealed
+// with the master key (secret.NewFileWriter): a copy of data/ without the
+// key doesn't give away the apps' data.
 
-const snapshotDir = "data/snapshots"
+const (
+	snapshotDir = "data/snapshots"
+	snapshotExt = ".sql.gz.enc"
+)
 
-func snapshotPath(app string) string { return filepath.Join(snapshotDir, app+".sql.gz") }
+func snapshotPath(app string) string { return filepath.Join(snapshotDir, app+snapshotExt) }
 
-// dumpTo writes a gzipped dump of d to a new file in snapshotDir.
+// dumpTo writes a sealed, gzipped dump of d to a new file in snapshotDir.
 func dumpTo(d store.Database) (path string, err error) {
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return "", err
@@ -31,11 +37,22 @@ func dumpTo(d store.Database) (path string, err error) {
 		return "", err
 	}
 	defer f.Close()
-	if err := backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, f); err != nil {
-		os.Remove(f.Name())
+	defer func() {
+		if err != nil {
+			os.Remove(f.Name())
+		}
+	}()
+	w, err := secret.NewFileWriter(f)
+	if err != nil {
 		return "", err
 	}
-	return f.Name(), nil
+	if err := backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, w); err != nil {
+		return "", err
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	return f.Name(), f.Sync()
 }
 
 // takeSnapshot dumps the app's database before a deploy; "" if the app has
@@ -96,6 +113,10 @@ func replaceDatabase(d store.Database, dump string) error {
 		return err
 	}
 	defer f.Close()
+	r, err := secret.NewFileReader(f)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", filepath.Base(dump), err)
+	}
 	// Database names can't contain dots, so this never clashes with one.
 	scratch := "hakobu.restore." + d.Name
 	drop := fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, scratch)
@@ -108,7 +129,7 @@ func replaceDatabase(d store.Database, dump string) error {
 			return err
 		}
 	}
-	if err := backup.RestoreDatabase(ctx(), PostgresContainer, d.User, scratch, f); err != nil {
+	if err := backup.RestoreDatabase(ctx(), PostgresContainer, d.User, scratch, r); err != nil {
 		if derr := deploy.PostgresExec(ctx(), PostgresContainer, drop); derr != nil {
 			fmt.Println("failed to drop", scratch+":", derr)
 		}
