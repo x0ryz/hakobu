@@ -170,7 +170,7 @@
   <a href="/databases/{{.Name}}" class="row"><span class="font-medium mono">{{.Name}}</span><span class="text-faint">→</span></a>
   {{end}}
   <form hx-post="/projects/{{.Project.Name}}/databases" class="flex gap-2">
-    <input name="name" placeholder="database name, e.g. main" required class="input flex-1">
+    <input name="name" placeholder="database name, e.g. main" value="{{.SuggestedDB}}" required class="input flex-1">
     <button class="btn">Create database</button>
   </form>
 </section>

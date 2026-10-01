@@ -43,6 +43,31 @@ func ensurePostgres() error {
 	return nil
 }
 
+// SuggestDatabaseName prefills the "new database" field so a name doesn't
+// have to be invented: the project name if it's a free valid database name,
+// "main" for the project's first database, "" (type your own) otherwise.
+func SuggestDatabaseName(s *store.Store, p store.Project) string {
+	clean := strings.ToLower(p.Name)
+	clean = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, clean)
+	clean = strings.Trim(clean, "-_")
+	for _, cand := range []string{clean, "main"} {
+		if !validDBName.MatchString(cand) {
+			continue
+		}
+		if _, err := s.GetDatabase(ctx(), cand); err != nil {
+			return cand
+		}
+	}
+	return ""
+}
+
 func CreateDatabase(s *store.Store, projectName, name string) error {
 	if !validDBName.MatchString(name) {
 		return fmt.Errorf("invalid database name %q: use lowercase letters, digits, dashes and underscores, starting with a letter", name)

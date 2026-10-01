@@ -206,7 +206,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		dbs, _ := s.ListDatabasesByProject(r.Context(), p.ID)
 		storages, _ := s.ListStoragesByProject(r.Context(), p.ID)
-		render(w, "project", map[string]any{"Project": p, "Apps": rows, "Databases": dbs, "Storages": storages, "Sealed": ops.SealedKeys(s, "project", p.Name)})
+		render(w, "project", map[string]any{"Project": p, "Apps": rows, "Databases": dbs, "Storages": storages, "Sealed": ops.SealedKeys(s, "project", p.Name), "SuggestedDB": ops.SuggestDatabaseName(s, p)})
 	})
 
 	action("DELETE /projects/{p}", func(r *http.Request) (string, error) {
