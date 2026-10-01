@@ -58,7 +58,14 @@ func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 // keys stay in the container's environment, for hakobu alone.
 func provisionRustFS(st *store.Storage) error {
 	st.Endpoint = "http://" + rustfsContainer + ":" + rustfsPort
-	st.Bucket = "hakobu-" + st.Name
+	// Removing a storage keeps its bucket and files: the random part keeps
+	// a later storage of the same name, maybe in another project, from
+	// being handed them.
+	suffix, err := RandomHex(4)
+	if err != nil {
+		return err
+	}
+	st.Bucket = "hakobu-" + st.Name + "-" + suffix
 	root, err := rustfsRoot(st.Bucket)
 	if err != nil {
 		return err
