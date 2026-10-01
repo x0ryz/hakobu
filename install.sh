@@ -10,7 +10,7 @@
 # Docker (their containers and databases live there); this script only
 # updates their binary.
 #
-#   curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo bash
+#   curl -fsSL https://hakobu.dev/install.sh | sudo bash
 #
 # Optional: CLOUDFLARE_API_TOKEN (skips the token prompt),
 #           HAKOBU_VERSION (default: latest release), HAKOBU_REPO (default: x0ryz/hakobu),
@@ -21,7 +21,11 @@ HAKOBU_REPO="${HAKOBU_REPO:-x0ryz/hakobu}"
 DATA=/opt/hakobu/data
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "run as root: curl -fsSL https://raw.githubusercontent.com/${HAKOBU_REPO}/main/install.sh | sudo bash"
+  if [ "$HAKOBU_REPO" = "x0ryz/hakobu" ]; then
+    echo "run as root: curl -fsSL https://hakobu.dev/install.sh | sudo bash"
+  else
+    echo "run as root: curl -fsSL https://raw.githubusercontent.com/${HAKOBU_REPO}/main/install.sh | sudo bash"
+  fi
   exit 1
 fi
 

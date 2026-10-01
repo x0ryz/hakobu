@@ -34,7 +34,7 @@ You need a Linux server and a domain on Cloudflare (the free plan is enough).
 The server needs no public IP or open ports: everything goes through a Cloudflare Tunnel.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/x0ryz/hakobu/main/install.sh | sudo bash
+curl -fsSL https://hakobu.dev/install.sh | sudo bash
 ```
 
 1. The installer shows a Cloudflare link to a new API token with hakobu's permissions
