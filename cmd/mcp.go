@@ -210,7 +210,7 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			return nil, out, err
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes and out-of-memory kills of an app, newest first: what its Sentry SDK sent and what hakobu saw.", Annotations: readOnly},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes, out-of-memory kills and health check outages of an app, newest first: what its Sentry SDK sent and what hakobu saw.", Annotations: readOnly},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			App   string `json:"app" jsonschema:"the app's name"`
 			Limit int    `json:"limit,omitempty" jsonschema:"up to 100; default 20"`

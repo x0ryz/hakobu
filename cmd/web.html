@@ -614,7 +614,7 @@
 <div class="space-y-2">
   {{range .}}
   <div class="console">
-    <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if or (eq .Kind "error") (eq .Kind "oom") (eq .Kind "crash")}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
+    <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if or (eq .Kind "error") (eq .Kind "oom") (eq .Kind "crash") (and (eq .Kind "health") (eq .Level "error"))}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
     <p class="mt-1">{{.Message}}</p>
   </div>
   {{else}}
