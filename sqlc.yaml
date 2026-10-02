@@ -24,6 +24,11 @@ sql:
           sha256: SHA256
           memory_mb: MemoryMB
           snapshot_db: SnapshotDB
+          oauth_client: OAuthClient
+          oauth_grant: OAuthGrant
+          oauth_token: OAuthToken
+          redirect_uri: RedirectURI
+          redirect_uris: RedirectURIs
         # Secrets are encrypted in the database (internal/secret).
         overrides:
           - column: projects.shared_env

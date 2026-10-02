@@ -311,3 +311,60 @@ INSERT OR IGNORE INTO webhook_deliveries (id) VALUES (?);
 
 -- name: PruneWebhookDeliveries :exec
 DELETE FROM webhook_deliveries WHERE created_at < ?;
+
+-- OAuth (MCP clients)
+
+-- name: CreateOAuthClient :exec
+INSERT INTO oauth_clients (id, name, redirect_uris) VALUES (?, ?, ?);
+
+-- name: GetOAuthClient :one
+SELECT * FROM oauth_clients WHERE id = ?;
+
+-- name: CountOAuthClients :one
+SELECT COUNT(*) FROM oauth_clients;
+
+-- name: PruneOAuthClients :exec
+DELETE FROM oauth_clients
+WHERE oauth_clients.created_at < ? AND oauth_clients.id NOT IN (SELECT client_id FROM oauth_grants);
+
+-- name: CreateOAuthGrant :one
+INSERT INTO oauth_grants (client_id, client_name, redirect_uri, scope, github_id) VALUES (?, ?, ?, ?, ?) RETURNING id;
+
+-- name: GetOAuthGrant :one
+SELECT * FROM oauth_grants WHERE id = ?;
+
+-- Grants with a token still alive, newest first.
+-- name: ListOAuthGrants :many
+SELECT * FROM oauth_grants g
+WHERE EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.grant_id = g.id AND t.kind != 'code' AND t.used_at = '' AND t.expires_at >= ?)
+ORDER BY g.id DESC;
+
+-- name: TouchOAuthGrant :exec
+UPDATE oauth_grants SET last_used_at = ? WHERE id = ?;
+
+-- name: DeleteOAuthGrant :exec
+DELETE FROM oauth_grants WHERE id = ?;
+
+-- name: DeleteAllOAuthGrants :exec
+DELETE FROM oauth_grants;
+
+-- Grants none of whose tokens can be used any more.
+-- name: PruneOAuthGrants :exec
+DELETE FROM oauth_grants
+WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.grant_id = oauth_grants.id AND t.expires_at >= ?);
+
+-- name: CreateOAuthToken :exec
+INSERT INTO oauth_tokens (id, grant_id, kind, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?);
+
+-- name: GetOAuthToken :one
+SELECT * FROM oauth_tokens WHERE id = ?;
+
+-- Marks a code or refresh token exchanged; 0 rows if it was already.
+-- name: UseOAuthToken :execrows
+UPDATE oauth_tokens SET used_at = ? WHERE id = ? AND used_at = '';
+
+-- name: PruneOAuthTokens :exec
+DELETE FROM oauth_tokens WHERE expires_at < ?;
+
+-- name: GetTelemetryEvent :one
+SELECT * FROM telemetry_events WHERE id = ? AND app_name = ?;

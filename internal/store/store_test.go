@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -392,5 +393,75 @@ func TestRotationRewrapsSnapshots(t *testing.T) {
 	}
 	if b, err := io.ReadAll(r); err != nil || string(b) != "dump" {
 		t.Errorf("snapshot after rotation = %q, %v", b, err)
+	}
+}
+
+func TestOAuthTokens(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	grant, err := s.CreateOAuthGrant(ctx, CreateOAuthGrantParams{ClientID: "c", ClientName: "C", RedirectURI: "https://c/cb", Scope: "read", GitHubID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh, _, err := s.NewOAuthToken(ctx, grant, "refresh", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _, err := s.NewOAuthToken(ctx, grant, "access", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := s.db.QueryRow(`SELECT id FROM oauth_tokens WHERE kind = 'access'`).Scan(&stored); err != nil || strings.Contains(access, stored) {
+		t.Errorf("access token stored as is: %v", err)
+	}
+	if _, _, err := s.RedeemOAuthToken(ctx, access, "refresh"); !errors.Is(err, ErrOAuthToken) {
+		t.Errorf("access token taken for a refresh token: %v", err)
+	}
+	if _, g, err := s.RedeemOAuthToken(ctx, refresh, "refresh"); err != nil || g.ID != grant {
+		t.Fatalf("redeem: %v %v", g, err)
+	}
+	// Presented again right away: the client retrying, the grant stays.
+	if _, _, err := s.RedeemOAuthToken(ctx, refresh, "refresh"); !errors.Is(err, ErrOAuthToken) {
+		t.Errorf("redeemed twice: %v", err)
+	}
+	if _, _, err := s.OAuthAccess(ctx, access); err != nil {
+		t.Errorf("grant revoked by a retry: %v", err)
+	}
+	// Presented again later: someone else has a copy, the grant goes.
+	if _, err := s.db.Exec(`UPDATE oauth_tokens SET used_at = ? WHERE used_at != ''`, timestamp(time.Now().Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RedeemOAuthToken(ctx, refresh, "refresh"); !errors.Is(err, ErrOAuthToken) {
+		t.Errorf("reused refresh token: %v", err)
+	}
+	if _, _, err := s.OAuthAccess(ctx, access); !errors.Is(err, ErrOAuthToken) {
+		t.Errorf("access token works after its refresh token was reused: %v", err)
+	}
+
+	// Expired tokens go, and with them grants left with nothing.
+	grant, _ = s.CreateOAuthGrant(ctx, CreateOAuthGrantParams{ClientID: "c", ClientName: "C", RedirectURI: "https://c/cb", Scope: "read", GitHubID: 42})
+	expired, _, _ := s.NewOAuthToken(ctx, grant, "access", "", -time.Minute)
+	if _, _, err := s.OAuthAccess(ctx, expired); !errors.Is(err, ErrOAuthToken) {
+		t.Errorf("expired access token: %v", err)
+	}
+	if err := s.CreateOAuthClient(ctx, CreateOAuthClientParams{ID: "old", Name: "x", RedirectURIs: "https://x/cb"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE oauth_clients SET created_at = ?`, timestamp(time.Now().Add(-48*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pruneOAuth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var grants, tokens, clients int
+	if err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM oauth_grants), (SELECT COUNT(*) FROM oauth_tokens), (SELECT COUNT(*) FROM oauth_clients)`).Scan(&grants, &tokens, &clients); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 0 || tokens != 0 || clients != 0 {
+		t.Errorf("after pruning: %d grants, %d tokens, %d clients", grants, tokens, clients)
 	}
 }

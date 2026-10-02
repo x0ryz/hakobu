@@ -145,6 +145,7 @@ func rotateSecrets(s *store.Store, out io.Writer) (manual []string, failures int
 		manual = append(manual, userVariables(s, apps)...)
 	}
 	step("everyone signed out", s.DeleteAllSessions(ctx()))
+	step("AI apps disconnected (connect them again)", s.DeleteAllOAuthGrants(ctx()))
 	step("master key rotated (copies of the old key and database are worthless)", s.RotateMasterKey())
 	if BackupBucket(s) != "" {
 		// Older panel backups need the old key; this one is the first a

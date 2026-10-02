@@ -100,6 +100,36 @@
 </div>
 </body></html>{{end}}
 
+{{define "oauth-consent"}}{{template "head" "Connect an app"}}
+<div class="min-h-screen flex items-center justify-center px-4">
+  <form method="post" action="/oauth/authorize" class="card w-full max-w-md">
+    <div class="flex items-center gap-2 font-semibold"><span class="w-2 h-2 rounded-full bg-accent"></span>Hakobu</div>
+    <h1 class="font-semibold">Allow <span class="mono">{{.Client.Name}}</span> to use this panel?</h1>
+    <p class="text-sm text-dim">It gets a token for <span class="mono">{{.PublicHost}}</span> and returns to <span class="mono">{{.RedirectHost}}</span>.{{if .Document}} It describes itself at <span class="mono break-all">{{.Client.ID}}</span>.{{end}}</p>
+    {{if .Loopback}}<p class="text-sm text-bad">It returns to a program on your own computer, like Claude Code. Allow it only if you just started connecting it there: any program on that computer could ask.</p>{{end}}
+    <div class="space-y-2 text-sm">
+      <label class="flex items-start gap-2"><input type="checkbox" checked disabled class="mt-1"><span><span class="font-medium">Read</span>: projects, apps, deploys and their logs, the apps' output and errors. Not the values of variables or any other secret.</span></label>
+      {{if .Deploy}}<label class="flex items-start gap-2"><input type="checkbox" name="deploy" value="1" checked class="mt-1"><span><span class="font-medium">Deploy</span>: deploy apps, roll them back (with their database, if asked) and restart workers.</span></label>{{end}}
+    </div>
+    <p class="text-xs text-faint">It can't delete anything or change settings. Disconnect it any time in Settings.</p>
+    <input type="hidden" name="request" value="{{.Request.Query}}">
+    <div class="flex gap-2">
+      <button name="approve" value="1" class="btn-pri flex-1">Allow</button>
+      <button name="deny" value="1" class="btn flex-1">Deny</button>
+    </div>
+  </form>
+</div>
+</body></html>{{end}}
+
+{{define "oauth-error"}}{{template "head" "Can't connect"}}
+<div class="min-h-screen flex items-center justify-center px-4">
+  <div class="card w-full max-w-md">
+    <div class="flex items-center gap-2 font-semibold"><span class="w-2 h-2 rounded-full bg-accent"></span>Hakobu</div>
+    <p class="text-sm text-bad break-words">{{.}}</p>
+  </div>
+</div>
+</body></html>{{end}}
+
 {{define "setup"}}{{template "head" "Setup"}}
 <div class="min-h-screen flex items-center justify-center px-4">
   <div class="card w-full max-w-md">
@@ -686,12 +716,30 @@
     {{else}}<p class="text-xs text-faint">Needs Cloudflare connected first.</p>{{end}}
   </div>
 
+  <div id="ai-apps" class="card">
+    <h2 class="h2">AI apps</h2>
+    <p class="text-sm text-dim">Claude can look at your apps, their deploys, logs and errors, and deploy or roll back if you allow it, through the MCP server at <span class="mono">https://{{.PublicHost}}/mcp</span>. You approve each app here with a GitHub sign-in.</p>
+    <ul class="text-sm text-dim list-disc pl-5 space-y-1">
+      <li>claude.ai, the desktop and mobile apps: Settings → Connectors → Add custom connector, with the address above.</li>
+      <li>Claude Code: <span class="mono break-all">claude mcp add --transport http hakobu https://{{.PublicHost}}/mcp</span>, then <span class="mono">/mcp</span> to sign in.</li>
+    </ul>
+    {{range .OAuthGrants}}
+    <div class="flex items-center justify-between gap-3 border-t border-edge pt-3">
+      <div class="min-w-0">
+        <p class="text-sm font-medium truncate">{{.ClientName}}</p>
+        <p class="text-xs text-faint">{{.Scope}} · connected {{.CreatedAt}}{{if .LastUsedAt}} · last used {{.LastUsedAt}}{{end}}</p>
+      </div>
+      <button hx-delete="/settings/ai-apps/{{.ID}}" hx-confirm="Disconnect {{.ClientName}}? Its tokens stop working at once." class="btn shrink-0">Disconnect</button>
+    </div>
+    {{else}}<p class="text-xs text-faint">No app connected.</p>{{end}}
+  </div>
+
   <div id="security" class="card" {{if .Rotation.Running}}hx-get="/settings" hx-trigger="every 2s" hx-select="#security" hx-swap="outerHTML"{{end}}>
     <div class="flex items-center justify-between gap-3">
       <h2 class="h2">Security</h2>
       <button hx-post="/settings/rotate-secrets" hx-confirm="Replace every secret hakobu can replace? Apps restart with the new values, the panel and apps are unreachable for a few seconds while the tunnel reconnects, and everyone (you too) has to sign in again." class="btn-danger" {{if .Rotation.Running}}disabled{{end}}>Replace all secrets</button>
     </div>
-    <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret and Cloudflare tunnel token, restarts the apps with them, signs everyone out and rotates the master key. It then lists what only you can replace.</p>
+    <p class="text-sm text-dim">If you suspect someone got at this server or its data: hakobu issues new database passwords, storage keys, Sentry keys, GitHub webhook secret and Cloudflare tunnel token, restarts the apps with them, signs everyone out, disconnects AI apps and rotates the master key. It then lists what only you can replace.</p>
     <div class="flex items-center justify-between gap-3 border-t border-edge pt-3">
       <p class="text-sm {{if .KeyDownloaded}}text-dim{{else}}text-bad{{end}}">{{if .KeyDownloaded}}You have a copy of the current master key.{{else}}You have no copy of the current master key: without it the panel's backups can't be restored.{{end}}</p>
       <a href="/settings/master-key" class="btn shrink-0">Download master key</a>

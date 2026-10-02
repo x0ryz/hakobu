@@ -263,7 +263,8 @@ func (s *Store) EndSession(ctx context.Context, token string) error {
 	return s.DeleteSession(ctx, sessionID(token))
 }
 
-// PruneOldData deletes logs, telemetry and sessions older than retentionDays.
+// PruneOldData deletes logs and telemetry older than retentionDays, and
+// sessions and OAuth tokens that expired.
 func (s *Store) PruneOldData(ctx context.Context, retentionDays int) error {
 	cutoff := timestamp(time.Now().AddDate(0, 0, -retentionDays))
 	if err := s.PruneDeployLogs(ctx, cutoff); err != nil {
@@ -273,6 +274,9 @@ func (s *Store) PruneOldData(ctx context.Context, retentionDays int) error {
 		return err
 	}
 	if err := s.DeleteExpiredSessions(ctx, timestamp(time.Now())); err != nil {
+		return err
+	}
+	if err := s.pruneOAuth(ctx); err != nil {
 		return err
 	}
 	if err := s.PruneWebhookDeliveries(ctx, timestamp(time.Now().Add(-2*WebhookMaxAge))); err != nil {

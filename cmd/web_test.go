@@ -39,7 +39,11 @@ func TestTemplatesRender(t *testing.T) {
 			"Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
 		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1",
 			"Rotation":            ops.Rotation{Started: "2026-09-30 10:00", Log: "done    x\n", Manual: []string{"GitHub App ..."}, Failures: 1},
-			"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@example.org", From: "hakobu@mail.p"}},
+			"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@example.org", From: "hakobu@mail.p"},
+			"OAuthGrants": []store.OAuthGrant{{ID: 1, ClientName: "Claude", Scope: "read deploy", CreatedAt: "t", LastUsedAt: "u"}}},
+		"oauth-consent": map[string]any{"Client": oauthClient{ID: "https://claude.ai/oauth/claude-code-client-metadata", Name: "Claude Code"}, "Request": authorizeRequest{Query: "a=b"},
+			"RedirectHost": "localhost:3118", "Loopback": true, "Document": true, "Deploy": true, "PublicHost": "p"},
+		"oauth-error": "boom",
 	}
 	for name, data := range cases {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {

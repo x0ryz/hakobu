@@ -20,6 +20,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
   a token for that bucket alone; hakobu checks they can't reach the backups), or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
+- **Claude can run it**: an MCP server at `https://<panel>/mcp` lets Claude (claude.ai, the desktop and mobile apps, Claude Code) read apps, deploys, logs and errors, and deploy or roll back if you allow it.
 - **Sign-in with GitHub only**, for the owner: the GitHub account that claimed the panel with the setup link.
 - **Cloudflare Tunnel**: panel and apps on your domain with HTTPS, no open ports. cloudflared runs in its own
   container and sends app traffic straight to the app's container, so restarting or upgrading hakobu doesn't take apps down.
@@ -73,6 +74,25 @@ with Email Routing on; where it's off, hakobu turns it on through
 `mail.<panel address>`, which leaves the domain's own mail alone (turning it on for the
 domain itself would replace its MX records). A token made before v0.5 lacks the email permissions:
 give hakobu a new one with `setup --reconnect`.
+
+### Claude (MCP)
+
+Hakobu is an MCP server at `https://<panel address>/mcp`, with its own OAuth: an app asking for
+access sends you to the panel, you sign in with GitHub (again, like for the master key) and allow it.
+
+- **claude.ai**, the desktop and mobile apps: Settings → Connectors → Add custom connector, with that address.
+- **Claude Code**: `claude mcp add --transport http hakobu https://<panel address>/mcp`, then `/mcp` to sign in.
+
+Its tools list apps and show one in detail (variable names, never values), read deploy logs, the apps'
+output and errors with stack traces, and wait for a deploy to finish, so Claude can push a fix and check it
+landed. Deploying, rolling back and restarting workers need the **Deploy** box ticked when you allow the
+app. Nothing deletes, changes settings or reveals a secret: the logs and errors Claude reads are written by
+your apps, and text in them could try to steer it. You're emailed when an app connects; **Settings → AI apps**
+lists them and disconnects one, and **Replace all secrets** disconnects all. Tokens last an hour and are
+renewed for up to 30 days of disuse; a renewal token used twice disconnects its app.
+
+The panel's Cloudflare zone must let Anthropic's servers (`160.79.104.0/21`) reach `/mcp`, `/oauth/*`
+and `/.well-known/*`: a WAF rule, Bot Fight Mode or Cloudflare Access in front of the panel blocks them.
 
 ### Bringing a panel back on a new server
 

@@ -121,6 +121,33 @@ type Notify struct {
 	SenderName   string
 }
 
+type OAuthClient struct {
+	ID           string
+	Name         string
+	RedirectURIs string
+	CreatedAt    string
+}
+
+type OAuthGrant struct {
+	ID          int64
+	ClientID    string
+	ClientName  string
+	RedirectURI string
+	Scope       string
+	GitHubID    int64
+	CreatedAt   string
+	LastUsedAt  string
+}
+
+type OAuthToken struct {
+	ID            string
+	GrantID       int64
+	Kind          string
+	CodeChallenge string
+	ExpiresAt     string
+	UsedAt        string
+}
+
 type Owner struct {
 	ID          int64
 	GitHubID    int64

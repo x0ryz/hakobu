@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -100,24 +101,34 @@ func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
 // panelHandler guards the panel against other sites. Apps are served from
 // subdomains of the same domain, which SameSite cookies treat as the same
 // site, so state-changing requests must also come from the panel's own
-// origin. The webhook and the Sentry endpoint are called cross-origin on
-// purpose and check their own secrets.
+// origin. The webhook, the Sentry endpoint, OAuth's token endpoints and MCP
+// are called cross-origin on purpose and check their own secrets.
 func panelHandler(mux http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection()
 	cop.AddInsecureBypassPattern("POST /webhook/github")
 	cop.AddInsecureBypassPattern("POST /api/{app_id}/envelope/")
+	// OAuth clients and MCP requests carry no cookies: they're authorized
+	// by their code, refresh or access token.
+	cop.AddInsecureBypassPattern("POST /oauth/token")
+	cop.AddInsecureBypassPattern("POST /oauth/register")
+	cop.AddInsecureBypassPattern("/mcp")
 	h := cop.Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
-		// Only the panel's own files run. Alpine evaluates its x-* attributes
-		// with new Function, hence unsafe-eval; the GitHub App manifest is
-		// posted to github.com.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self' https://github.com; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", panelCSP("https://github.com"))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		h.ServeHTTP(w, r)
 	})
+}
+
+// panelCSP lets only the panel's own files run. Alpine evaluates its x-*
+// attributes with new Function, hence unsafe-eval. Forms may also go to
+// formTarget: github.com, where the GitHub App manifest is posted, or the
+// app an OAuth consent sends the browser back to.
+func panelCSP(formTarget string) string {
+	return "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self' " + formTarget + "; frame-ancestors 'none'"
 }
 
 func cookieMatches(r *http.Request, name, want string) bool {
@@ -148,22 +159,15 @@ func done(w http.ResponseWriter, redirect string) {
 
 func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	registerAuthRoutes(mux, s)
+	registerOAuthRoutes(mux, s)
+	registerMCPRoutes(mux, s)
 	mux.Handle("GET /static/", staticHandler())
 
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// The session's account is checked against the owner on every
-			// request, so a change of owner takes effect at once.
-			if c, err := r.Cookie(sessionCookie); err == nil {
-				if id, signedIn, err := s.SessionUser(r.Context(), c.Value); err == nil {
-					if mayAccess(r.Context(), s, id) {
-						h(w, r.WithContext(context.WithValue(r.Context(), signedInKey{}, signedIn)))
-						return
-					}
-					if err := s.EndSession(r.Context(), c.Value); err != nil {
-						fmt.Println("failed to end a session:", err)
-					}
-				}
+			if signedIn, ok := ownerSession(r, s); ok {
+				h(w, r.WithContext(context.WithValue(r.Context(), signedInKey{}, signedIn)))
+				return
 			}
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", "/login")
@@ -571,6 +575,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
 			"Notify": ops.Notifications(s),
 		}
+		data["OAuthGrants"], _ = s.LiveOAuthGrants(r.Context())
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
 		}
@@ -613,6 +618,14 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 	action("DELETE /settings/notify", func(r *http.Request) (string, error) {
 		return "", ops.TurnOffNotifications(s)
+	})
+
+	action("DELETE /settings/ai-apps/{id}", func(r *http.Request) (string, error) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("no such app")
+		}
+		return "", s.DeleteOAuthGrant(r.Context(), id)
 	})
 
 	action("POST /settings/rotate-secrets", func(r *http.Request) (string, error) {
@@ -796,9 +809,13 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		setCookie(w, sessionCookie, id, int(sessionTTL.Seconds()))
 		next := "/"
-		if cookieMatches(r, afterCookie, "master-key") {
+		if c, err := r.Cookie(afterCookie); err == nil {
 			setCookie(w, afterCookie, "", -1)
-			next = "/settings/master-key"
+			if c.Value == "master-key" {
+				next = "/settings/master-key"
+			} else if q, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(c.Value, oauthAfterPrefix)); err == nil && strings.HasPrefix(c.Value, oauthAfterPrefix) {
+				next = "/oauth/authorize?" + string(q)
+			}
 		}
 		http.Redirect(w, r, next, http.StatusSeeOther)
 	})
@@ -877,6 +894,28 @@ func splitDomain(domain string, zones []string) (sub, zone string) {
 		}
 	}
 	return sub, zone
+}
+
+// ownerSession reports whether the request has the owner's session, and
+// when it signed in. The session's account is checked against the owner on
+// every request, so a change of owner takes effect at once; a session of
+// anyone else is ended.
+func ownerSession(r *http.Request, s *store.Store) (signedIn time.Time, ok bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return signedIn, false
+	}
+	id, signedIn, err := s.SessionUser(r.Context(), c.Value)
+	if err != nil {
+		return signedIn, false
+	}
+	if mayAccess(r.Context(), s, id) {
+		return signedIn, true
+	}
+	if err := s.EndSession(r.Context(), c.Value); err != nil {
+		fmt.Println("failed to end a session:", err)
+	}
+	return signedIn, false
 }
 
 // mayAccess reports whether a GitHub user ID is the owner's.

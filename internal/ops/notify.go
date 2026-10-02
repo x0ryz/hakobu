@@ -507,3 +507,13 @@ func CheckForOwner(s *store.Store) {
 		solved(s, "key", "", "")
 	}
 }
+
+// NoteOAuthConnection mails the owner that an app was given access through
+// OAuth, so a connection they didn't make doesn't go unnoticed.
+func NoteOAuthConnection(s *store.Store, client, redirectHost string, scopes []string) {
+	async(func() {
+		sendOrLog(s, client+" connected to hakobu", fmt.Sprintf(
+			"You allowed %s (it returns to %s) to use hakobu with scopes: %s.\n\nIf that wasn't you, disconnect it and sign out everywhere: %s",
+			client, redirectHost, strings.Join(scopes, ", "), panelURL("/settings#ai-apps")))
+	})
+}

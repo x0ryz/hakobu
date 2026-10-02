@@ -82,6 +82,17 @@ func (q *Queries) AppsUsingStorage(ctx context.Context, linkedStorage string) ([
 	return items, nil
 }
 
+const countOAuthClients = `-- name: CountOAuthClients :one
+SELECT COUNT(*) FROM oauth_clients
+`
+
+func (q *Queries) CountOAuthClients(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOAuthClients)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createApp = `-- name: CreateApp :exec
 
 INSERT INTO apps (project_id, name, repo, port, container_port, build_path, build_strategy)
@@ -180,6 +191,71 @@ func (q *Queries) CreateDeployLog(ctx context.Context, arg CreateDeployLogParams
 	return id, err
 }
 
+const createOAuthClient = `-- name: CreateOAuthClient :exec
+
+INSERT INTO oauth_clients (id, name, redirect_uris) VALUES (?, ?, ?)
+`
+
+type CreateOAuthClientParams struct {
+	ID           string
+	Name         string
+	RedirectURIs string
+}
+
+// OAuth (MCP clients)
+func (q *Queries) CreateOAuthClient(ctx context.Context, arg CreateOAuthClientParams) error {
+	_, err := q.db.ExecContext(ctx, createOAuthClient, arg.ID, arg.Name, arg.RedirectURIs)
+	return err
+}
+
+const createOAuthGrant = `-- name: CreateOAuthGrant :one
+INSERT INTO oauth_grants (client_id, client_name, redirect_uri, scope, github_id) VALUES (?, ?, ?, ?, ?) RETURNING id
+`
+
+type CreateOAuthGrantParams struct {
+	ClientID    string
+	ClientName  string
+	RedirectURI string
+	Scope       string
+	GitHubID    int64
+}
+
+func (q *Queries) CreateOAuthGrant(ctx context.Context, arg CreateOAuthGrantParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, createOAuthGrant,
+		arg.ClientID,
+		arg.ClientName,
+		arg.RedirectURI,
+		arg.Scope,
+		arg.GitHubID,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createOAuthToken = `-- name: CreateOAuthToken :exec
+INSERT INTO oauth_tokens (id, grant_id, kind, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?)
+`
+
+type CreateOAuthTokenParams struct {
+	ID            string
+	GrantID       int64
+	Kind          string
+	CodeChallenge string
+	ExpiresAt     string
+}
+
+func (q *Queries) CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenParams) error {
+	_, err := q.db.ExecContext(ctx, createOAuthToken,
+		arg.ID,
+		arg.GrantID,
+		arg.Kind,
+		arg.CodeChallenge,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const createProject = `-- name: CreateProject :exec
 
 INSERT INTO projects (name) VALUES (?)
@@ -271,6 +347,15 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 	return err
 }
 
+const deleteAllOAuthGrants = `-- name: DeleteAllOAuthGrants :exec
+DELETE FROM oauth_grants
+`
+
+func (q *Queries) DeleteAllOAuthGrants(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllOAuthGrants)
+	return err
+}
+
 const deleteAllSessions = `-- name: DeleteAllSessions :exec
 DELETE FROM sessions
 `
@@ -340,6 +425,15 @@ DELETE FROM notify WHERE id = 1
 
 func (q *Queries) DeleteNotify(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteNotify)
+	return err
+}
+
+const deleteOAuthGrant = `-- name: DeleteOAuthGrant :exec
+DELETE FROM oauth_grants WHERE id = ?
+`
+
+func (q *Queries) DeleteOAuthGrant(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteOAuthGrant, id)
 	return err
 }
 
@@ -648,6 +742,60 @@ func (q *Queries) GetNotify(ctx context.Context) (Notify, error) {
 	return i, err
 }
 
+const getOAuthClient = `-- name: GetOAuthClient :one
+SELECT id, name, redirect_uris, created_at FROM oauth_clients WHERE id = ?
+`
+
+func (q *Queries) GetOAuthClient(ctx context.Context, id string) (OAuthClient, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthClient, id)
+	var i OAuthClient
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.RedirectURIs,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getOAuthGrant = `-- name: GetOAuthGrant :one
+SELECT id, client_id, client_name, redirect_uri, scope, github_id, created_at, last_used_at FROM oauth_grants WHERE id = ?
+`
+
+func (q *Queries) GetOAuthGrant(ctx context.Context, id int64) (OAuthGrant, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthGrant, id)
+	var i OAuthGrant
+	err := row.Scan(
+		&i.ID,
+		&i.ClientID,
+		&i.ClientName,
+		&i.RedirectURI,
+		&i.Scope,
+		&i.GitHubID,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+	)
+	return i, err
+}
+
+const getOAuthToken = `-- name: GetOAuthToken :one
+SELECT id, grant_id, kind, code_challenge, expires_at, used_at FROM oauth_tokens WHERE id = ?
+`
+
+func (q *Queries) GetOAuthToken(ctx context.Context, id string) (OAuthToken, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthToken, id)
+	var i OAuthToken
+	err := row.Scan(
+		&i.ID,
+		&i.GrantID,
+		&i.Kind,
+		&i.CodeChallenge,
+		&i.ExpiresAt,
+		&i.UsedAt,
+	)
+	return i, err
+}
+
 const getOwner = `-- name: GetOwner :one
 SELECT github_id, github_login, github_email FROM owner WHERE id = 1
 `
@@ -720,6 +868,30 @@ func (q *Queries) GetStorage(ctx context.Context, name string) (Storage, error) 
 		&i.SecretAccessKey,
 		&i.Bucket,
 		&i.Region,
+	)
+	return i, err
+}
+
+const getTelemetryEvent = `-- name: GetTelemetryEvent :one
+SELECT id, app_name, kind, level, message, payload, created_at FROM telemetry_events WHERE id = ? AND app_name = ?
+`
+
+type GetTelemetryEventParams struct {
+	ID      int64
+	AppName string
+}
+
+func (q *Queries) GetTelemetryEvent(ctx context.Context, arg GetTelemetryEventParams) (TelemetryEvent, error) {
+	row := q.db.QueryRowContext(ctx, getTelemetryEvent, arg.ID, arg.AppName)
+	var i TelemetryEvent
+	err := row.Scan(
+		&i.ID,
+		&i.AppName,
+		&i.Kind,
+		&i.Level,
+		&i.Message,
+		&i.Payload,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1155,6 +1327,45 @@ func (q *Queries) ListDeployLogs(ctx context.Context, arg ListDeployLogsParams) 
 	return items, nil
 }
 
+const listOAuthGrants = `-- name: ListOAuthGrants :many
+SELECT id, client_id, client_name, redirect_uri, scope, github_id, created_at, last_used_at FROM oauth_grants g
+WHERE EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.grant_id = g.id AND t.kind != 'code' AND t.used_at = '' AND t.expires_at >= ?)
+ORDER BY g.id DESC
+`
+
+// Grants with a token still alive, newest first.
+func (q *Queries) ListOAuthGrants(ctx context.Context, expiresAt string) ([]OAuthGrant, error) {
+	rows, err := q.db.QueryContext(ctx, listOAuthGrants, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OAuthGrant
+	for rows.Next() {
+		var i OAuthGrant
+		if err := rows.Scan(
+			&i.ID,
+			&i.ClientID,
+			&i.ClientName,
+			&i.RedirectURI,
+			&i.Scope,
+			&i.GitHubID,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT id, name, shared_env FROM projects ORDER BY name
 `
@@ -1413,6 +1624,36 @@ DELETE FROM deploy_logs WHERE created_at < ?
 
 func (q *Queries) PruneDeployLogs(ctx context.Context, createdAt string) error {
 	_, err := q.db.ExecContext(ctx, pruneDeployLogs, createdAt)
+	return err
+}
+
+const pruneOAuthClients = `-- name: PruneOAuthClients :exec
+DELETE FROM oauth_clients
+WHERE oauth_clients.created_at < ? AND oauth_clients.id NOT IN (SELECT client_id FROM oauth_grants)
+`
+
+func (q *Queries) PruneOAuthClients(ctx context.Context, createdAt string) error {
+	_, err := q.db.ExecContext(ctx, pruneOAuthClients, createdAt)
+	return err
+}
+
+const pruneOAuthGrants = `-- name: PruneOAuthGrants :exec
+DELETE FROM oauth_grants
+WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.grant_id = oauth_grants.id AND t.expires_at >= ?)
+`
+
+// Grants none of whose tokens can be used any more.
+func (q *Queries) PruneOAuthGrants(ctx context.Context, expiresAt string) error {
+	_, err := q.db.ExecContext(ctx, pruneOAuthGrants, expiresAt)
+	return err
+}
+
+const pruneOAuthTokens = `-- name: PruneOAuthTokens :exec
+DELETE FROM oauth_tokens WHERE expires_at < ?
+`
+
+func (q *Queries) PruneOAuthTokens(ctx context.Context, expiresAt string) error {
+	_, err := q.db.ExecContext(ctx, pruneOAuthTokens, expiresAt)
 	return err
 }
 
@@ -1859,6 +2100,20 @@ func (q *Queries) SetTunnelToken(ctx context.Context, tunnelToken secret.String)
 	return err
 }
 
+const touchOAuthGrant = `-- name: TouchOAuthGrant :exec
+UPDATE oauth_grants SET last_used_at = ? WHERE id = ?
+`
+
+type TouchOAuthGrantParams struct {
+	LastUsedAt string
+	ID         int64
+}
+
+func (q *Queries) TouchOAuthGrant(ctx context.Context, arg TouchOAuthGrantParams) error {
+	_, err := q.db.ExecContext(ctx, touchOAuthGrant, arg.LastUsedAt, arg.ID)
+	return err
+}
+
 const updateDeployLog = `-- name: UpdateDeployLog :exec
 UPDATE deploy_logs SET status = ?, output = ? WHERE id = ?
 `
@@ -1872,4 +2127,22 @@ type UpdateDeployLogParams struct {
 func (q *Queries) UpdateDeployLog(ctx context.Context, arg UpdateDeployLogParams) error {
 	_, err := q.db.ExecContext(ctx, updateDeployLog, arg.Status, arg.Output, arg.ID)
 	return err
+}
+
+const useOAuthToken = `-- name: UseOAuthToken :execrows
+UPDATE oauth_tokens SET used_at = ? WHERE id = ? AND used_at = ''
+`
+
+type UseOAuthTokenParams struct {
+	UsedAt string
+	ID     string
+}
+
+// Marks a code or refresh token exchanged; 0 rows if it was already.
+func (q *Queries) UseOAuthToken(ctx context.Context, arg UseOAuthTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, useOAuthToken, arg.UsedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
