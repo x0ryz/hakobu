@@ -227,6 +227,7 @@ func webhookHandler(s *store.Store) http.HandlerFunc {
 			Repository struct {
 				FullName      string `json:"full_name"`
 				DefaultBranch string `json:"default_branch"`
+				PushedAt      int64  `json:"pushed_at"` // Unix time, in push events
 			} `json:"repository"`
 		}
 		if err := json.Unmarshal(body, &push); err != nil {
@@ -234,6 +235,25 @@ func webhookHandler(s *store.Store) http.HandlerFunc {
 			return
 		}
 		if push.Ref != "refs/heads/"+push.Repository.DefaultBranch {
+			return
+		}
+		// The signature doesn't expire: a delivery someone captured would
+		// deploy again whenever it's sent. Each is handled once, and an old
+		// push not at all.
+		if push.Repository.PushedAt > 0 && time.Since(time.Unix(push.Repository.PushedAt, 0)) > store.WebhookMaxAge {
+			http.Error(w, "push too old", http.StatusConflict)
+			return
+		}
+		id := r.Header.Get("X-GitHub-Delivery")
+		if id == "" {
+			http.Error(w, "no delivery ID", http.StatusBadRequest)
+			return
+		}
+		if n, err := s.NoteWebhookDelivery(r.Context(), id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if n == 0 {
+			http.Error(w, "delivery handled before", http.StatusConflict)
 			return
 		}
 		apps, err := s.ListAppsByRepo(context.Background(), push.Repository.FullName)

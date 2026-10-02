@@ -176,6 +176,11 @@ type Volume struct {
 	MountPath string
 }
 
+type WebhookDelivery struct {
+	ID        string
+	CreatedAt string
+}
+
 type Worker struct {
 	AppName string
 	Name    string

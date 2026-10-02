@@ -275,9 +275,16 @@ func (s *Store) PruneOldData(ctx context.Context, retentionDays int) error {
 	if err := s.DeleteExpiredSessions(ctx, timestamp(time.Now())); err != nil {
 		return err
 	}
+	if err := s.PruneWebhookDeliveries(ctx, timestamp(time.Now().Add(-2*WebhookMaxAge))); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `VACUUM`)
 	return err
 }
+
+// WebhookMaxAge is how old a push can be and still deploy; deliveries are
+// remembered for longer, so a replay is refused one way or the other.
+const WebhookMaxAge = 24 * time.Hour
 
 // timestamp matches the strftime('%Y-%m-%dT%H:%M:%SZ') format of created_at
 // columns, so string comparison orders correctly.

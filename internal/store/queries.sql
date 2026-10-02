@@ -302,3 +302,12 @@ ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_name = excluded.sen
 
 -- name: DeleteNotify :exec
 DELETE FROM notify WHERE id = 1;
+
+-- Webhooks
+
+-- name: NoteWebhookDelivery :execrows
+-- 0 rows: the delivery was handled before.
+INSERT OR IGNORE INTO webhook_deliveries (id) VALUES (?);
+
+-- name: PruneWebhookDeliveries :exec
+DELETE FROM webhook_deliveries WHERE created_at < ?;

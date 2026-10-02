@@ -1392,6 +1392,21 @@ func (q *Queries) ListVolumes(ctx context.Context, appName string) ([]Volume, er
 	return items, nil
 }
 
+const noteWebhookDelivery = `-- name: NoteWebhookDelivery :execrows
+
+INSERT OR IGNORE INTO webhook_deliveries (id) VALUES (?)
+`
+
+// Webhooks
+// 0 rows: the delivery was handled before.
+func (q *Queries) NoteWebhookDelivery(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, noteWebhookDelivery, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pruneDeployLogs = `-- name: PruneDeployLogs :exec
 DELETE FROM deploy_logs WHERE created_at < ?
 `
@@ -1407,6 +1422,15 @@ DELETE FROM telemetry_events WHERE created_at < ?
 
 func (q *Queries) PruneTelemetry(ctx context.Context, createdAt string) error {
 	_, err := q.db.ExecContext(ctx, pruneTelemetry, createdAt)
+	return err
+}
+
+const pruneWebhookDeliveries = `-- name: PruneWebhookDeliveries :exec
+DELETE FROM webhook_deliveries WHERE created_at < ?
+`
+
+func (q *Queries) PruneWebhookDeliveries(ctx context.Context, createdAt string) error {
+	_, err := q.db.ExecContext(ctx, pruneWebhookDeliveries, createdAt)
 	return err
 }
 
