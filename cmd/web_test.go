@@ -64,7 +64,7 @@ func TestTemplatesRender(t *testing.T) {
 	for _, data := range []map[string]any{
 		{"PublicHost": "p", "Notify": ops.NotifyInfo{On: true}, "To": []ops.NotifyChoice{{Value: "a@b.c", Note: "n", Selected: true}},
 			"From": []ops.NotifyChoice{{Value: "mail.p", Note: "n"}}},
-		{"PublicHost": "p", "Error": "boom", "OtherValue": "x@y.z"},
+		{"PublicHost": "p", "Error": "boom", "OtherValue": "x@y.z", "Why": []string{"example.com: its mail goes to mx.example"}},
 	} {
 		if err := templates.ExecuteTemplate(io.Discard, "notify-form", data); err != nil {
 			t.Errorf("notify-form: %v", err)

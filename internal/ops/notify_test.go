@@ -27,6 +27,7 @@ type fakeEmail struct {
 	routed    map[string]bool      // subdomains with Email Routing
 	addresses map[string]bool      // address → verified
 	txt       map[string][2]string // record ID → name, content
+	mx        []string             // the apex's mail servers
 	subjects  []string
 	nextID    int
 }
@@ -55,15 +56,30 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 			}
 			ok(map[string]any{"enabled": f.apexReady || len(f.routed) > 0, "status": status, "subdomains": subs})
 		case route == "POST /zones/z1/email/routing/dns":
-			f.routed[body["name"]] = true
-			f.addTXT(body["name"], "v=spf1 include:_spf.mx.cloudflare.net ~all")
+			if body["name"] == "example.com" {
+				f.apexReady, f.mx = true, []string{"route1.mx.cloudflare.net"}
+			} else {
+				f.routed[body["name"]] = true
+				f.addTXT(body["name"], cloudflare.CloudflareSPF)
+			}
 			if len(f.spf("example.com")) == 0 {
-				f.addTXT("example.com", "v=spf1 include:_spf.mx.cloudflare.net ~all")
+				f.addTXT("example.com", cloudflare.CloudflareSPF)
 			}
 			ok(map[string]any{})
 		case route == "DELETE /zones/z1/email/routing/dns":
+			if body["name"] == "example.com" {
+				f.apexReady, f.mx = false, nil
+			}
 			delete(f.routed, body["name"])
 			ok(map[string]any{})
+		case route == "GET /zones/z1/dns_records" && r.URL.Query().Get("type") == "MX":
+			var list []map[string]string
+			if r.URL.Query().Get("name") == "example.com" {
+				for _, m := range f.mx {
+					list = append(list, map[string]string{"content": m})
+				}
+			}
+			ok(list)
 		case route == "GET /zones/z1/dns_records":
 			var list []map[string]string
 			for _, id := range f.spf(r.URL.Query().Get("name")) {
@@ -166,10 +182,13 @@ func TestSetupNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	to, from, err := NotifyChoices(s)
+	// The domain's mail goes elsewhere: only the panel's mail subdomain is
+	// offered, and why the apex isn't is said.
+	f.mx = []string{"mx1.other.example"}
+	to, from, why, err := NotifyChoices(s)
 	if err != nil || len(to) != 2 || to[0].Value != "old@example.org" || to[1].Value != "me@example.org" ||
-		len(from) != 1 || from[0].Value != "mail.panel.example.com" {
-		t.Fatalf("choices: to %+v, from %+v, %v", to, from, err)
+		len(from) != 1 || from[0].Value != "mail.panel.example.com" || len(why) != 1 || !strings.Contains(why[0], "mx1.other.example") {
+		t.Fatalf("choices: to %+v, from %+v, why %v, %v", to, from, why, err)
 	}
 
 	if err := SetupNotifications(s, "not an address", ""); err == nil {
@@ -193,7 +212,7 @@ func TestSetupNotifications(t *testing.T) {
 	if info := Notifications(s); !info.Verified {
 		t.Errorf("after confirming: %+v", info)
 	}
-	if _, from, _ := NotifyChoices(s); len(from) != 1 || !from[0].Selected {
+	if _, from, _, _ := NotifyChoices(s); len(from) != 1 || !from[0].Selected || from[0].Note != "Email Routing is on" {
 		t.Errorf("the mail subdomain is offered twice or not as the current one: %+v", from)
 	}
 
@@ -219,13 +238,36 @@ func TestSetupNotifications(t *testing.T) {
 		t.Errorf("test email with notifications off: %v", err)
 	}
 
-	// Email Routing already working for the apex: that's the sender.
-	f.apexReady = true
+	// The domain gets no mail now: its apex is offered, and sending from it
+	// turns Email Routing on there, Cloudflare's SPF included; off undoes it.
+	f.mx = nil
+	if _, from, why, _ := NotifyChoices(s); len(from) != 2 || from[1].Value != "example.com" || len(why) != 0 {
+		t.Errorf("choices without MX: from %+v, why %v", from, why)
+	}
+	if err := SetupNotifications(s, "old@example.org", "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if info := Notifications(s); info.From != "hakobu@example.com" || !f.apexReady || len(f.spf("example.com")) != 1 {
+		t.Errorf("apex sender: %+v, ready %v, SPF %v", info, f.apexReady, f.spf("example.com"))
+	}
+	if err := TurnOffNotifications(s); err != nil {
+		t.Fatal(err)
+	}
+	if f.apexReady || len(f.spf("example.com")) != 0 {
+		t.Errorf("after turning off: ready %v, SPF %v", f.apexReady, f.spf("example.com"))
+	}
+
+	// Email Routing already working for the apex: that's the sender, and it
+	// stays on.
+	f.apexReady, f.mx = true, []string{"route1.mx.cloudflare.net"}
 	if err := SetupNotifications(s, "old@example.org", ""); err != nil {
 		t.Fatal(err)
 	}
 	if info := Notifications(s); info.From != "hakobu@example.com" || len(f.routed) != 0 {
 		t.Errorf("apex sender: %+v, routed %v", info, f.routed)
+	}
+	if err := TurnOffNotifications(s); err != nil || !f.apexReady {
+		t.Errorf("turning off left the owner's Email Routing on: %v, ready %v", err, f.apexReady)
 	}
 	if err := SetupNotifications(s, "old@example.org", "other.dev"); err == nil {
 		t.Error("sent from a domain outside the account")

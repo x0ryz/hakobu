@@ -64,6 +64,25 @@ func (c Client) DisableEmailRouting(zoneID, name string) error {
 	return c.call("DELETE", "/zones/"+zoneID+"/email/routing/dns", map[string]string{"name": name}, nil)
 }
 
+// MXRecords returns the mail servers of name.
+func (c Client) MXRecords(zoneID, name string) ([]string, error) {
+	var recs []struct {
+		Content string `json:"content"`
+	}
+	q := url.Values{"type": {"MX"}, "name": {name}}
+	if err := c.call("GET", "/zones/"+zoneID+"/dns_records?"+q.Encode(), nil, &recs); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range recs {
+		out = append(out, r.Content)
+	}
+	return out, nil
+}
+
+// CloudflareSPF is the SPF record Email Routing writes.
+const CloudflareSPF = `"v=spf1 include:_spf.mx.cloudflare.net ~all"`
+
 // SPFRecords returns the IDs of the SPF records of name, by content.
 func (c Client) SPFRecords(zoneID, name string) (map[string]string, error) {
 	var recs []struct {

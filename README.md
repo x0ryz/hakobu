@@ -64,9 +64,9 @@ Cloudflare sends. Hakobu then emails you when a deploy after a push fails, a bac
 fails, an app runs out of memory, the disk is almost full or the master key isn't
 downloaded; each problem once, again only if it's still there hours later, and once
 more when it's gone. It goes through Cloudflare Email Service, free for a confirmed
-address, from your domain if Email Routing is on there already, otherwise from
-`mail.<panel address>`: hakobu never turns Email Routing on for a domain's apex, which
-would replace its MX records. A token made before v0.5 lacks the email permissions:
+address, from `mail.<panel address>` or a domain with Email Routing on already; hakobu
+turns it on for a domain's apex only if the domain gets no mail, since that would
+replace its MX records. A token made before v0.5 lacks the email permissions:
 give hakobu a new one with `setup --reconnect`.
 
 ### Bringing a panel back on a new server
