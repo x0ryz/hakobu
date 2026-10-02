@@ -54,7 +54,7 @@ func TestTemplatesRender(t *testing.T) {
 			"Token":       []cloudflare.Permission{{Name: "Zone Read", For: "domains"}, {Name: "Workers Scripts Edit", For: "the watchdog", Missing: true}, {Name: "Workers R2 Storage Edit", For: "backups", Unknown: true}},
 			"OAuthGrants": []store.OAuthGrant{{ID: 1, ClientName: "Claude", Scope: "read deploy", CreatedAt: "t", LastUsedAt: "u"}},
 			"Usage":       usageRows([]teldb.Sample{{Target: ops.HostTarget, Cpu: 1, CpuLimit: 4, Mem: 1 << 30, MemLimit: 8 << 30}, {Target: "app:web", Mem: 500 << 20, MemLimit: 512 << 20}, {Target: "service:postgres", Mem: 100 << 20}}),
-			"Update":      ops.UpdateInfo{Current: "v0.6.0", Latest: "v0.7.0", Available: true, Updater: true, HasLast: true, Last: update.Status{State: "running", To: "v0.7.0", Message: "downloading"}}},
+			"Update":      ops.UpdateInfo{Current: "v0.6.0", Latest: "v0.7.0", CheckedAt: "2026-10-02 12:00 UTC", Available: true, Updater: true, HasLast: true, Last: update.Status{State: "running", To: "v0.7.0", Message: "downloading"}}},
 		"oauth-consent": map[string]any{"Client": oauthClient{ID: "https://claude.ai/oauth/claude-code-client-metadata", Name: "Claude Code"}, "Request": authorizeRequest{Query: "a=b"},
 			"RedirectHost": "localhost:3118", "Loopback": true, "Document": true, "Deploy": true, "PublicHost": "p"},
 		"oauth-error": "boom",

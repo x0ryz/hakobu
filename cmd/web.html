@@ -787,7 +787,10 @@
       <h2 class="h2">Updates</h2>
       {{if and .Available .Updater}}<button hx-post="/settings/update" hx-confirm="Update hakobu to {{.Latest}}? The panel is down for a minute while it restarts; apps keep running. If the new version doesn't come up, this one is put back." class="btn-pri" {{if or .Requested (and .HasLast (eq .Last.State "running"))}}disabled{{end}}>Update to {{.Latest}}</button>{{end}}
     </div>
-    <p class="text-sm text-dim">This is hakobu <span class="mono">{{.Current}}</span>{{if .Available}}; <a href="https://github.com/x0ryz/hakobu/releases/tag/{{.Latest}}" target="_blank" class="underline mono">{{.Latest}}</a> is out.{{else if .Latest}}, the latest release.{{else}}.{{end}}</p>
+    <div class="flex items-center justify-between gap-3">
+      <p class="text-sm text-dim">This is hakobu <span class="mono">{{.Current}}</span>{{if .Available}}; <a href="https://github.com/x0ryz/hakobu/releases/tag/{{.Latest}}" target="_blank" class="underline mono">{{.Latest}}</a> is out.{{else if .Latest}}, the latest release.{{else}}.{{end}}{{if .CheckedAt}} <span class="text-xs text-faint">Checked {{.CheckedAt}}.</span>{{end}}</p>
+      <button hx-post="/settings/update/check" class="link shrink-0">Check for updates</button>
+    </div>
     {{if .Requested}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Asked for, starting…</p>
     {{else if .HasLast}}{{with .Last}}
     <p class="text-sm {{if or (eq .State "failed") (eq .State "rolled back")}}text-bad{{else}}text-dim{{end}}">

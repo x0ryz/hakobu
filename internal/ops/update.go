@@ -13,7 +13,6 @@ import (
 // hakobu updates itself through systemd (internal/update): the panel only
 // asks, by creating update.RequestFile.
 
-
 // UpdateInfo is what Settings shows about updates.
 type UpdateInfo struct {
 	Current   string
@@ -28,6 +27,7 @@ type UpdateInfo struct {
 	// and this server picks up the request.
 	Previous    string
 	UpdatedAt   string
+	CheckedAt   string // when GitHub last told the latest release
 	CanRollBack bool
 	// RollbackLosesData: the update changed the database's schema, so a
 	// rollback puts back its copy from before the update.
@@ -40,16 +40,17 @@ var latest struct {
 	sync.Mutex
 	tag      string
 	asked    time.Time
+	checked  time.Time // when GitHub last answered
 	checking bool
 }
 
 // latestRelease returns the latest release known, asking GitHub in the
-// background at most every few hours (every few minutes until it answers);
-// "" until it has.
+// background at most every hour (every few minutes until it answers); ""
+// until it has.
 func latestRelease() string {
 	latest.Lock()
 	defer latest.Unlock()
-	every := 6 * time.Hour
+	every := time.Hour
 	if latest.tag == "" {
 		every = 5 * time.Minute
 	}
@@ -61,16 +62,37 @@ func latestRelease() string {
 			defer latest.Unlock()
 			latest.checking = false
 			if err == nil {
-				latest.tag = tag
+				latest.tag, latest.checked = tag, time.Now()
 			}
 		}()
 	}
 	return latest.tag
 }
 
+// CheckForUpdates asks GitHub for the latest release right away.
+func CheckForUpdates() error {
+	tag, err := update.Latest()
+	if err != nil {
+		return err
+	}
+	latest.Lock()
+	defer latest.Unlock()
+	latest.tag, latest.asked, latest.checked = tag, time.Now(), time.Now()
+	return nil
+}
+
+func latestChecked() string {
+	latest.Lock()
+	defer latest.Unlock()
+	if latest.checked.IsZero() {
+		return ""
+	}
+	return latest.checked.UTC().Format("2006-01-02 15:04 UTC")
+}
+
 // Updates describes the running version and the latest release.
 func Updates(current string) UpdateInfo {
-	info := UpdateInfo{Current: update.Tag(current), Latest: latestRelease()}
+	info := UpdateInfo{Current: update.Tag(current), Latest: latestRelease(), CheckedAt: latestChecked()}
 	info.Available = info.Latest != "" && update.Newer(info.Latest, current)
 	info.Updater = update.UnitsInstalled("hakobu-update.path")
 	for _, f := range []string{update.RequestFile, update.RollbackRequestFile} {

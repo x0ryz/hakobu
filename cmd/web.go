@@ -665,6 +665,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		render(w, "settings", data)
 	})
 
+	action("POST /settings/update/check", func(r *http.Request) (string, error) {
+		return "", ops.CheckForUpdates()
+	})
+
 	action("POST /settings/update", func(r *http.Request) (string, error) {
 		return "", ops.RequestUpdate()
 	})
