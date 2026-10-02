@@ -612,6 +612,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		return "", ops.RequestUpdate()
 	})
 
+	action("POST /settings/rollback", func(r *http.Request) (string, error) {
+		return "", ops.RequestRollback()
+	})
+
 	action("POST /settings/cleanup", func(r *http.Request) (string, error) {
 		return "", ops.Cleanup(s)
 	})

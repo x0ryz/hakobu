@@ -723,17 +723,23 @@
       {{if and .Available .Updater}}<button hx-post="/settings/update" hx-confirm="Update hakobu to {{.Latest}}? The panel is down for a minute while it restarts; apps keep running. If the new version doesn't come up, this one is put back." class="btn-pri" {{if or .Requested (and .HasLast (eq .Last.State "running"))}}disabled{{end}}>Update to {{.Latest}}</button>{{end}}
     </div>
     <p class="text-sm text-dim">This is hakobu <span class="mono">{{.Current}}</span>{{if .Available}}; <a href="https://github.com/x0ryz/hakobu/releases/tag/{{.Latest}}" target="_blank" class="underline mono">{{.Latest}}</a> is out.{{else if .Latest}}, the latest release.{{else}}.{{end}}</p>
-    {{if .Requested}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Update asked for…</p>
+    {{if .Requested}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Asked for, starting…</p>
     {{else if .HasLast}}{{with .Last}}
     <p class="text-sm {{if or (eq .State "failed") (eq .State "rolled back")}}text-bad{{else}}text-dim{{end}}">
-      {{if eq .State "running"}}<span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Updating to <span class="mono">{{.To}}</span>: {{.Message}}…
+      {{if eq .State "running"}}<span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> {{.Message}}…
       {{else if eq .State "updated"}}Updated from <span class="mono">{{.From}}</span> to <span class="mono">{{.To}}</span> at {{.At.Format "2006-01-02 15:04 UTC"}}.
       {{else if eq .State "up to date"}}Checked at {{.At.Format "2006-01-02 15:04 UTC"}}: already the latest.
       {{else if eq .State "rolled back"}}{{if .Message}}{{.Message}}{{else}}Rolled back from <span class="mono">{{.From}}</span> to <span class="mono">{{.To}}</span>{{end}} ({{.At.Format "2006-01-02 15:04 UTC"}}).
-      {{else}}Update to <span class="mono">{{.To}}</span> failed at {{.At.Format "2006-01-02 15:04 UTC"}}: {{.Message}}{{end}}
+      {{else}}Failed at {{.At.Format "2006-01-02 15:04 UTC"}}: {{.Message}}{{end}}
     </p>
     {{end}}{{end}}
-    <p class="text-xs text-faint">{{if .Updater}}A release is installed only if it's signed with hakobu's release key and matches its checksum. The panel can only ask for the latest release: a root service downloads and checks it, so the panel can't replace its own program. To go back to the version before the last update, run <span class="mono">sudo /opt/hakobu/hakobu rollback</span>.{{else}}This server has no updater yet: update once over SSH with the install command, which sets it up.{{end}}</p>
+    {{if .CanRollBack}}
+    <div class="flex items-center justify-between gap-3 border-t border-edge pt-3">
+      <p class="text-sm text-dim">{{if .RollbackBlocked}}Can't go back to <span class="mono">{{.Previous}}</span>: {{.RollbackBlocked}}.{{else}}Updated from <span class="mono">{{.Previous}}</span> at {{.UpdatedAt}}; you can go back to it.{{if .RollbackLosesData}} <span class="text-bad">That update changed the panel's database, so it goes back to its copy from then: what changed in the panel since (apps, settings, deploy history) is lost; the newer database is kept on the server.</span>{{end}}{{end}}</p>
+      {{if not .RollbackBlocked}}<button hx-post="/settings/rollback" hx-confirm="Go back to hakobu {{.Previous}}? The panel is down for a minute; apps keep running.{{if .RollbackLosesData}} The panel's database goes back to how it was at {{.UpdatedAt}}.{{end}}" class="btn shrink-0" {{if or .Requested (and .HasLast (eq .Last.State "running"))}}disabled{{end}}>Roll back to {{.Previous}}</button>{{end}}
+    </div>
+    {{end}}
+    <p class="text-xs text-faint">{{if .Updater}}A release is installed only if it's signed with hakobu's release key and matches its checksum. The panel can only ask for the latest release, or to go back one update: a root service does the work, so the panel can't replace its own program. If a new version doesn't come up, the previous one is put back by itself.{{else}}This server has no updater yet: update once over SSH with the install command, which sets it up.{{end}}</p>
   </div>
   {{end}}
   <div class="card">

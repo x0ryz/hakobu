@@ -285,8 +285,8 @@ else
   rm -rf "$SRC"
 fi
 chmod +x /opt/hakobu/hakobu
-# What `hakobu rollback` would put back belongs to an update this
-# install replaced.
+# What a rollback would put back belongs to an update this install
+# replaced.
 rm -f /opt/hakobu/hakobu.prev /opt/hakobu/update-state.json
 
 if [ -n "${HAKOBU_RESTORE:-}" ]; then
@@ -383,32 +383,14 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 EOF
 fi
-# The panel's Update button: hakobu, which can't write its own binary,
-# creates data/update-request, and systemd runs the update as root. It
-# installs the latest signed release, whatever the request says.
-cat > /etc/systemd/system/hakobu-update.path <<'EOF'
-[Unit]
-Description=hakobu updates asked for in its panel
-
-[Path]
-PathExists=/opt/hakobu/data/update-request
-
-[Install]
-WantedBy=multi-user.target
-EOF
-cat > /etc/systemd/system/hakobu-update.service <<'EOF'
-[Unit]
-Description=Update hakobu to its latest signed release
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/hakobu
-ExecStart=/opt/hakobu/hakobu update --requested
-TimeoutStartSec=20min
-EOF
+# The panel's Update and Roll back buttons: hakobu, which can't write its
+# own binary, asks through a file in data/ and systemd does the work as
+# root. Each version writes its own units (internal/update/units.go).
+if ! /opt/hakobu/hakobu install-units >/dev/null; then
+  echo "    WARNING: no Update button: this hakobu can't install its updater (update with sudo /opt/hakobu/hakobu update)"
+fi
 systemctl daemon-reload
 systemctl enable hakobu >/dev/null 2>&1
-systemctl enable --now hakobu-update.path >/dev/null 2>&1
 systemctl restart hakobu
 
 for _ in $(seq 1 30); do

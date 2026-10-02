@@ -22,9 +22,10 @@ import (
 // The panel can't update hakobu itself: it runs as the unprivileged user
 // hakobu, which can't write the binary, so a break-in into the panel can't
 // plant a binary of its own. It asks by creating RequestFile; systemd
-// (hakobu-update.path) then runs `hakobu update --requested` as root,
-// which installs only the latest signed release. The worst a forged
-// request does is that.
+// (hakobu-update.path, see units.go) then runs `hakobu update --requested`
+// as root, which installs only the latest signed release. The worst a
+// forged request does is that, or with RollbackRequestFile, going one
+// step back to the version that ran before.
 
 // RequestFile, under the install's directory, asks for an update.
 const RequestFile = "data/update-request"
@@ -35,7 +36,7 @@ const (
 	binaryFile   = "hakobu"
 	prevFile     = "hakobu.prev"     // the binary before the last update
 	downloadFile = "hakobu.download" // a release being checked
-	stateFile    = "update-state.json"
+	StateFile    = "update-state.json" // readable by the panel
 	StatusFile   = "update-status.json" // read by the panel
 	lockFile     = "update.lock"
 	databaseFile = "data/hakobu.db"
@@ -58,8 +59,8 @@ type Install struct {
 	addr    string
 }
 
-// state is what an update leaves for a rollback.
-type state struct {
+// State is what an update leaves for a rollback.
+type State struct {
 	Previous       string    // version of the binary in prevFile
 	PreviousSchema int       // the schema version it knows
 	UpdatedAt      time.Time // when it was replaced
@@ -154,7 +155,7 @@ func (in *Install) Update(tag string) error {
 		in.setStatus("failed", tag, err.Error())
 		return err
 	}
-	if err := in.saveState(state{Previous: in.Version, PreviousSchema: store.SchemaVersion(), UpdatedAt: time.Now().UTC()}); err != nil {
+	if err := in.saveState(State{Previous: in.Version, PreviousSchema: store.SchemaVersion(), UpdatedAt: time.Now().UTC()}); err != nil {
 		in.startAgain()
 		in.setStatus("failed", tag, err.Error())
 		return err
@@ -171,6 +172,10 @@ func (in *Install) Update(tag string) error {
 		return err
 	}
 
+	// The new version's systemd units, for buttons it brings.
+	if out, err := in.command(in.Dir, in.path(binaryFile), "install-units"); err != nil {
+		in.logf("couldn't install the systemd units of %s: %v %s", tag, err, out)
+	}
 	in.logf("starting hakobu %s", tag)
 	if err := in.start(); err == nil && in.waitHealthy() {
 		in.logf("hakobu %s is up; `hakobu rollback` goes back to %s", tag, in.Version)
@@ -198,16 +203,30 @@ func (in *Install) Rollback() error {
 	defer unlock()
 	st, err := in.loadState()
 	if err != nil {
+		in.setStatus("failed", "", err.Error())
 		return err
 	}
 	from := in.Version
+	in.setStatusFrom(from, "running", st.Previous, "going back to "+st.Previous)
 	in.Version = st.Previous
 	if err := in.rollback(); err != nil {
 		in.Version = from
+		in.setStatusFrom(from, "failed", st.Previous, "going back to "+st.Previous+" failed: "+err.Error())
 		return err
 	}
 	in.setStatusFrom(from, "rolled back", st.Previous, "")
 	return nil
+}
+
+// ReadState reads what the last update left for a rollback, as the panel
+// does; ok is false when there's nothing to go back to.
+func ReadState(dir string) (st State, ok bool) {
+	b, err := os.ReadFile(filepath.Join(dir, StateFile))
+	if err != nil || json.Unmarshal(b, &st) != nil {
+		return st, false
+	}
+	_, err = os.Stat(filepath.Join(dir, prevFile))
+	return st, err == nil
 }
 
 func (in *Install) rollback() error {
@@ -246,7 +265,7 @@ func (in *Install) rollback() error {
 		in.startAgain()
 		return err
 	}
-	os.Remove(in.path(stateFile))
+	os.Remove(in.path(StateFile))
 	in.logf("starting hakobu %s", st.Previous)
 	if err := in.start(); err != nil {
 		return err
@@ -258,17 +277,17 @@ func (in *Install) rollback() error {
 	return nil
 }
 
-func (in *Install) saveState(st state) error {
+func (in *Install) saveState(st State) error {
 	b, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(in.path(stateFile), b, 0o600)
+	return writeFileAtomic(in.path(StateFile), b, 0o644)
 }
 
-func (in *Install) loadState() (state, error) {
-	var st state
-	b, err := os.ReadFile(in.path(stateFile))
+func (in *Install) loadState() (State, error) {
+	var st State
+	b, err := os.ReadFile(in.path(StateFile))
 	if err == nil {
 		err = json.Unmarshal(b, &st)
 	}

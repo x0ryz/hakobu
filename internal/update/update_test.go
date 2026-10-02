@@ -211,8 +211,18 @@ func TestUpdateAndRollback(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, cmds)
 		}
 	}
+	if !strings.Contains(cmds, filepath.Join(f.Dir, binaryFile)+" install-units") {
+		t.Errorf("the new version's units weren't installed:\n%s", cmds)
+	}
 	if st, _ := ReadStatus(f.Dir); st.State != "updated" || st.From != "v0.6.0" || st.To != "v0.7.0" {
 		t.Errorf("status %+v", st)
+	}
+	// What the panel shows for Roll back.
+	if st, ok := ReadState(f.Dir); !ok || st.Previous != "v0.6.0" {
+		t.Errorf("state %+v, %v", st, ok)
+	}
+	if info, _ := os.Stat(filepath.Join(f.Dir, StateFile)); info.Mode().Perm() != 0o644 {
+		t.Errorf("the panel can't read the state: %v", info.Mode())
 	}
 	if info, _ := os.Stat(filepath.Join(f.Dir, StatusFile)); info.Mode().Perm() != 0o644 {
 		t.Errorf("the panel can't read the status: %v", info.Mode())
@@ -231,6 +241,9 @@ func TestUpdateAndRollback(t *testing.T) {
 	}
 	if st, _ := ReadStatus(f.Dir); st.State != "rolled back" || st.To != "v0.6.0" {
 		t.Errorf("status %+v", st)
+	}
+	if _, ok := ReadState(f.Dir); ok {
+		t.Error("Roll back still offered after rolling back")
 	}
 	f.Version = "v0.6.0"
 	if err := f.Rollback(); err == nil {
@@ -333,5 +346,31 @@ func mustWrite(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInstallUnits(t *testing.T) {
+	old := unitDir
+	unitDir = t.TempDir()
+	t.Cleanup(func() { unitDir = old })
+	f := newFakeInstall(t, "v0.7.0")
+	if err := f.InstallUnits(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"hakobu-update.path", "hakobu-rollback.path"} {
+		if !UnitsInstalled(name) {
+			t.Errorf("%s not installed", name)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(unitDir, "hakobu-rollback.service"))
+	if !strings.Contains(string(b), "ExecStart="+filepath.Join(f.Dir, binaryFile)+" rollback --requested") {
+		t.Errorf("rollback unit:\n%s", b)
+	}
+	b, _ = os.ReadFile(filepath.Join(unitDir, "hakobu-rollback.path"))
+	if !strings.Contains(string(b), "PathExists="+filepath.Join(f.Dir, RollbackRequestFile)) {
+		t.Errorf("rollback path unit:\n%s", b)
+	}
+	if got := strings.Join(f.commands, "\n"); got != "systemctl daemon-reload\nsystemctl enable --now hakobu-update.path hakobu-rollback.path" {
+		t.Errorf("commands:\n%s", got)
 	}
 }

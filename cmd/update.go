@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	updateTo        string
-	updateRequested bool
+	updateTo          string
+	updateRequested   bool
+	rollbackRequested bool
 )
 
 // updateCmd installs a newer signed release; the panel's Update button
@@ -34,12 +35,10 @@ back to it later.`,
 			return err
 		}
 		if updateRequested {
-			// Removed first: a request that fails isn't retried in a loop.
-			// Whatever the panel wrote in it is never read.
 			if updateTo != "" {
 				return errors.New("--requested installs the latest release only")
 			}
-			if err := os.Remove(filepath.Join(dir, update.RequestFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := takeRequest(dir, update.RequestFile); err != nil {
 				return err
 			}
 		}
@@ -63,11 +62,44 @@ in the panel since is lost; the newer database is kept beside it).`,
 		if err != nil {
 			return err
 		}
+		if rollbackRequested {
+			if err := takeRequest(dir, update.RollbackRequestFile); err != nil {
+				return err
+			}
+		}
 		in, err := update.Detect(dir, version, config.AgentAddr, os.Stdout)
 		if err != nil {
 			return err
 		}
 		return in.Rollback()
+	},
+}
+
+// takeRequest removes the panel's request before acting on it, so one
+// that fails isn't retried in a loop. Whatever is in it is never read.
+func takeRequest(dir, file string) error {
+	if err := os.Remove(filepath.Join(dir, file)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// installUnitsCmd sets up the systemd units behind the panel's Update and
+// Roll back buttons; install.sh and updates run it as root.
+var installUnitsCmd = &cobra.Command{
+	Use:    "install-units",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir, err := installDir()
+		if err != nil {
+			return err
+		}
+		in, err := update.Detect(dir, version, config.AgentAddr, os.Stdout)
+		if err != nil {
+			return err
+		}
+		return in.InstallUnits()
 	},
 }
 
@@ -122,5 +154,6 @@ func installDir() (string, error) {
 func init() {
 	updateCmd.Flags().StringVar(&updateTo, "to", "", "install this release (e.g. v1.2.3) instead of the latest; it must be signed too")
 	updateCmd.Flags().BoolVar(&updateRequested, "requested", false, "run for the panel's Update button (by systemd)")
-	rootCmd.AddCommand(updateCmd, rollbackCmd, snapshotDBCmd, schemaVersionCmd)
+	rollbackCmd.Flags().BoolVar(&rollbackRequested, "requested", false, "run for the panel's Roll back button (by systemd)")
+	rootCmd.AddCommand(updateCmd, rollbackCmd, snapshotDBCmd, schemaVersionCmd, installUnitsCmd)
 }

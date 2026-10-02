@@ -66,7 +66,8 @@ func TestTemplatesRender(t *testing.T) {
 		}
 	}
 	for _, st := range []string{"updated", "up to date", "failed", "rolled back"} {
-		data := map[string]any{"Update": ops.UpdateInfo{Current: "v0.7.0", Latest: "v0.7.0", Updater: true, HasLast: true, Last: update.Status{State: st, From: "v0.6.0", To: "v0.7.0"}}}
+		data := map[string]any{"Update": ops.UpdateInfo{Current: "v0.7.0", Latest: "v0.7.0", Updater: true, HasLast: true, Last: update.Status{State: st, From: "v0.6.0", To: "v0.7.0"},
+			Previous: "v0.6.0", UpdatedAt: "t", CanRollBack: true, RollbackLosesData: st == "failed", RollbackBlocked: map[bool]string{true: "gone"}[st == "rolled back"]}}
 		if err := templates.ExecuteTemplate(io.Discard, "settings", data); err != nil {
 			t.Errorf("settings after an update that %s: %v", st, err)
 		}
