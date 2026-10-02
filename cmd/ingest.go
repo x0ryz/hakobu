@@ -100,7 +100,8 @@ func (l *limiter) allow(key string) bool {
 }
 
 // registerIngestRoutes accepts Sentry envelopes at the DSN every app gets as
-// SENTRY_DSN; errors and structured logs are stored, other items dropped.
+// SENTRY_DSN; errors, structured logs and traces are stored, other items
+// dropped.
 func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 	lim := newLimiter()
 	mux.HandleFunc("POST /api/{app_id}/envelope/", func(w http.ResponseWriter, r *http.Request) {
@@ -108,10 +109,6 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 		app, err := s.GetAppByID(r.Context(), appID)
 		if err != nil || app.SentryKey == "" || subtle.ConstantTimeCompare([]byte(app.SentryKey), []byte(sentryKey(r))) != 1 {
 			http.Error(w, "invalid dsn", http.StatusUnauthorized)
-			return
-		}
-		if !lim.allow(app.Name) {
-			http.Error(w, "rate limited", http.StatusTooManyRequests)
 			return
 		}
 		body, err := readEnvelope(r)
@@ -128,13 +125,19 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 			http.Error(w, "invalid envelope", http.StatusBadRequest)
 			return
 		}
+		// Traces come with every sampled request: they get a budget of
+		// their own, so a busy app's traces don't crowd out its errors.
+		if !lim.allow(limitKey(app.Name, items)) {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
 
 		saved := 0
 		save := func(kind string, sum ingest.Summary, payload []byte) {
 			if saved++; saved > maxEventsPerEnvelope {
 				return
 			}
-			if err := s.Tel.CreateTelemetryEvent(r.Context(), teldb.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload)}); err != nil {
+			if err := s.Tel.CreateTelemetryEvent(r.Context(), teldb.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload), TraceID: sum.TraceID}); err != nil {
 				fmt.Println("ingest: failed to store event:", err)
 			}
 		}
@@ -146,6 +149,12 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 				for _, entry := range ingest.ExtractLogEntries(item) {
 					save("log", entry.Summary, entry.Payload)
 				}
+			case "transaction":
+				if tx, ok := ingest.ExtractTransaction(item); ok {
+					if err := ops.RecordTransaction(s, app.Name, tx, item.Payload); err != nil {
+						fmt.Println("ingest: failed to store a trace:", err)
+					}
+				}
 			}
 		}
 
@@ -153,4 +162,18 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id":"%s"}`, id)
 	})
+}
+
+// limitKey is the rate limit an envelope counts against: the app's own,
+// or its traces' when it holds nothing but transactions.
+func limitKey(app string, items []ingest.Item) string {
+	for _, item := range items {
+		if item.Type != "transaction" {
+			return app
+		}
+	}
+	if len(items) == 0 {
+		return app
+	}
+	return app + " traces"
 }

@@ -524,6 +524,46 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		render(w, "errors", events)
 	})
 
+	handle("GET /apps/{a}/performance", func(w http.ResponseWriter, r *http.Request) {
+		app := r.PathValue("a")
+		rng := r.URL.Query().Get("range")
+		if rng != "7d" {
+			rng = "24h"
+		}
+		routes, err := ops.RoutesOf(s, app, ops.MetricRanges[rng])
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		traces, err := s.Tel.ListTraces(r.Context(), teldb.ListTracesParams{AppName: app, Limit: 50})
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		render(w, "performance", map[string]any{"App": app, "Range": rng, "Routes": routes, "Traces": traces})
+	})
+
+	handle("GET /apps/{a}/traces/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		t, err := ops.TraceOf(s, r.PathValue("a"), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		render(w, "trace", traceView{t, time.Unix(t.CreatedAt, 0).UTC().Format("2006-01-02 15:04:05 UTC")})
+	})
+
+	// From an error to the trace of the request it happened in, if kept.
+	handle("GET /apps/{a}/traces/by-trace/{trace}", func(w http.ResponseWriter, r *http.Request) {
+		app := r.PathValue("a")
+		id, err := s.Tel.TraceByTraceID(r.Context(), teldb.TraceByTraceIDParams{AppName: app, TraceID: r.PathValue("trace")})
+		if err != nil {
+			http.Error(w, "That request's trace wasn't kept: only slow and failed ones are, for a week, and only when the SDK traces requests (traces_sample_rate).", http.StatusNotFound)
+			return
+		}
+		http.Redirect(w, r, fmt.Sprintf("/apps/%s/traces/%d", url.PathEscape(app), id), http.StatusSeeOther)
+	})
+
 	action("POST /apps/{a}/worker", func(r *http.Request) (string, error) {
 		return "", ops.SaveWorker(s, store.Worker{
 			AppName: r.PathValue("a"),
@@ -968,4 +1008,10 @@ func ownerSession(r *http.Request, s *store.Store) (signedIn time.Time, ok bool)
 func mayAccess(ctx context.Context, s *store.Store, githubID int64) bool {
 	owner, err := s.Owner(ctx)
 	return err == nil && owner.GitHubID != 0 && githubID == owner.GitHubID
+}
+
+// traceView is a kept trace for its page.
+type traceView struct {
+	ops.Waterfall
+	At string
 }

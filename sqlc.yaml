@@ -83,3 +83,7 @@ sql:
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
           - column: telemetry_events.payload
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: traces.slow_span
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: traces.payload
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}

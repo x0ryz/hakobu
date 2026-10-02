@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -245,6 +246,53 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			return nil, summarizeUsage(target, rng, rows), nil
 		})
 
+	mcp.AddTool(server, &mcp.Tool{Name: "slow_routes", Description: "List an app's routes (requests and tasks its Sentry SDK traced) with how many ran, p50/p95/average durations and the share that failed, the ones that took the most time in all first; and the latest slow (1 s and over) or failed requests kept whole, for get_trace. Needs traces_sample_rate set in the app's Sentry SDK.", Annotations: readOnly},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			App   string `json:"app" jsonschema:"the app's name"`
+			Range string `json:"range,omitempty" jsonschema:"24h (default) or 7d"`
+		}) (*mcp.CallToolResult, mcpRoutes, error) {
+			out := mcpRoutes{Routes: []mcpRoute{}, Kept: []mcpKeptTrace{}}
+			app, err := getApp(ctx, in.App)
+			if err != nil {
+				return nil, out, err
+			}
+			out.Range = in.Range
+			if out.Range != "7d" {
+				out.Range = "24h"
+			}
+			routes, err := ops.RoutesOf(s, app.Name, ops.MetricRanges[out.Range])
+			if err != nil {
+				return nil, out, err
+			}
+			for _, r := range routes[:min(len(routes), 50)] {
+				out.Routes = append(out.Routes, mcpRoute{Name: r.Name, Count: r.Count, P50: r.P50Ms, P95: r.P95Ms, P95Over: r.P95Over, Avg: r.AvgMs, FailedPct: math.Round(r.ErrorPct()*10) / 10})
+			}
+			kept, err := s.Tel.ListTraces(ctx, teldb.ListTracesParams{AppName: app.Name, Limit: 20})
+			if err != nil {
+				return nil, out, err
+			}
+			for _, t := range kept {
+				out.Kept = append(out.Kept, mcpKeptTrace{ID: t.ID, At: time.Unix(t.CreatedAt, 0).UTC().Format(time.RFC3339), Name: t.Name, DurationMs: t.DurationMs, HTTPStatus: t.HttpStatus, Status: t.Status, SlowestSpan: head(string(t.SlowSpan), 300)})
+			}
+			return nil, out, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "get_trace", Description: "Read a slow or failed request of an app kept whole, from slow_routes: its spans (database queries, HTTP calls, ...) with when each started and how long it took, to see where the time went.", Annotations: readOnly},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			App string `json:"app" jsonschema:"the app's name"`
+			ID  int64  `json:"id" jsonschema:"the trace's id from slow_routes"`
+		}) (*mcp.CallToolResult, mcpTrace, error) {
+			t, err := ops.TraceOf(s, in.App, in.ID)
+			if err != nil {
+				return nil, mcpTrace{}, err
+			}
+			out := mcpTrace{ID: t.ID, TraceID: t.TraceID, Name: t.Name, DurationMs: t.DurationMs, HTTPStatus: t.HttpStatus, Status: t.Status, Spans: []mcpSpan{}}
+			for _, sp := range t.Tx.Spans[:min(len(t.Tx.Spans), 200)] {
+				out.Spans = append(out.Spans, mcpSpan{Op: sp.Op, Description: head(sp.Description, 500), StartMs: sp.Start.Milliseconds(), DurationMs: sp.Duration.Milliseconds(), Status: sp.Status})
+			}
+			return nil, out, nil
+		})
+
 	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes, out-of-memory kills and health check outages of an app, newest first: what its Sentry SDK sent and what hakobu saw.", Annotations: readOnly},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			App   string `json:"app" jsonschema:"the app's name"`
@@ -450,4 +498,56 @@ func summarizeUsage(target, rng string, rows []teldb.Sample) mcpUsage {
 		st.Now, st.Avg, st.Peak, st.Limit = round(st.Now), round(st.Avg), round(st.Peak), round(st.Limit)
 	}
 	return u
+}
+
+type mcpRoutes struct {
+	Range  string         `json:"range"`
+	Routes []mcpRoute     `json:"routes" jsonschema:"empty when no traces arrived"`
+	Kept   []mcpKeptTrace `json:"slow_or_failed" jsonschema:"newest first"`
+}
+
+type mcpRoute struct {
+	Name      string  `json:"route"`
+	Count     int64   `json:"requests"`
+	P50       int64   `json:"p50_ms"`
+	P95       int64   `json:"p95_ms"`
+	P95Over   bool    `json:"p95_over,omitempty" jsonschema:"p95 is over 10 s, p95_ms only says 10000"`
+	Avg       int64   `json:"avg_ms"`
+	FailedPct float64 `json:"failed_percent"`
+}
+
+type mcpKeptTrace struct {
+	ID          int64  `json:"id"`
+	At          string `json:"at"`
+	Name        string `json:"route"`
+	DurationMs  int64  `json:"duration_ms"`
+	HTTPStatus  int64  `json:"http_status,omitempty"`
+	Status      string `json:"status"`
+	SlowestSpan string `json:"slowest_span,omitempty"`
+}
+
+type mcpTrace struct {
+	ID         int64     `json:"id"`
+	TraceID    string    `json:"trace_id"`
+	Name       string    `json:"route"`
+	DurationMs int64     `json:"duration_ms"`
+	HTTPStatus int64     `json:"http_status,omitempty"`
+	Status     string    `json:"status"`
+	Spans      []mcpSpan `json:"spans" jsonschema:"by start, up to 200"`
+}
+
+type mcpSpan struct {
+	Op          string `json:"op"`
+	Description string `json:"description,omitempty"`
+	StartMs     int64  `json:"start_ms" jsonschema:"from the request's start"`
+	DurationMs  int64  `json:"duration_ms"`
+	Status      string `json:"status,omitempty"`
+}
+
+// head keeps the first n bytes of s: the start of a query says what it is.
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "…"
 }

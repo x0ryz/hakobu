@@ -36,4 +36,38 @@ type TelemetryEvent struct {
 	Message   secret.String
 	Payload   secret.String
 	CreatedAt string
+	TraceID   string
+}
+
+type Trace struct {
+	ID         int64
+	AppName    string
+	TraceID    string
+	Name       string
+	Status     string
+	HttpStatus int64
+	DurationMs int64
+	SlowSpan   secret.String
+	Payload    secret.String
+	CreatedAt  int64
+}
+
+type TraceRoute struct {
+	AppName string
+	Name    string
+	Hour    int64
+	Count   int64
+	Errors  int64
+	TotalMs int64
+	B0      int64
+	B1      int64
+	B2      int64
+	B3      int64
+	B4      int64
+	B5      int64
+	B6      int64
+	B7      int64
+	B8      int64
+	B9      int64
+	B10     int64
 }

@@ -73,6 +73,7 @@ func ParseEnvelope(body []byte) ([]Item, error) {
 type Summary struct {
 	Level   string
 	Message string
+	TraceID string // of the request or task it happened in, if traced
 }
 
 // ExtractEventSummary falls back to the first exception's "type: value"
@@ -87,6 +88,11 @@ func ExtractEventSummary(item Item) Summary {
 				Value string `json:"value"`
 			} `json:"values"`
 		} `json:"exception"`
+		Contexts struct {
+			Trace struct {
+				TraceID string `json:"trace_id"`
+			} `json:"trace"`
+		} `json:"contexts"`
 	}
 	json.Unmarshal(item.Payload, &e)
 
@@ -99,7 +105,7 @@ func ExtractEventSummary(item Item) Summary {
 	if level == "" {
 		level = "error"
 	}
-	return Summary{Level: level, Message: msg}
+	return Summary{Level: level, Message: msg, TraceID: e.Contexts.Trace.TraceID}
 }
 
 // LogEntry is one record of a "log" item, with its own JSON.

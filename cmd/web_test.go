@@ -40,7 +40,7 @@ func TestTemplatesRender(t *testing.T) {
 			}},
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
-		"errors":  []teldb.TelemetryEvent{{Kind: "error", Message: "boom"}},
+		"errors":  []teldb.TelemetryEvent{{Kind: "error", Message: "boom", AppName: "web", TraceID: "abc"}},
 		"usage": usageView{Query: "target=host", Range: "24h", Ranges: usageRanges, Charts: targetCharts(ops.HostTarget, []teldb.Sample{
 			{Ts: 1000, Cpu: 0.5, CpuMax: 1, CpuLimit: 2, Mem: 1 << 30, MemMax: 1 << 30, MemLimit: 4 << 30, Load: 0.3},
 			{Ts: 1060, Cpu: 1.5, CpuMax: 2, CpuLimit: 2, Mem: 2 << 30, MemMax: 3 << 30, MemLimit: 4 << 30, Load: 0.9},
@@ -56,6 +56,10 @@ func TestTemplatesRender(t *testing.T) {
 		"oauth-consent": map[string]any{"Client": oauthClient{ID: "https://claude.ai/oauth/claude-code-client-metadata", Name: "Claude Code"}, "Request": authorizeRequest{Query: "a=b"},
 			"RedirectHost": "localhost:3118", "Loopback": true, "Document": true, "Deploy": true, "PublicHost": "p"},
 		"oauth-error": "boom",
+		"performance": map[string]any{"App": "web", "Range": "24h", "Routes": []ops.RouteStats{{Name: "/orders/{id}", Count: 20, Errors: 1, AvgMs: 40, P50Ms: 20, P95Ms: 10000, P95Over: true}},
+			"Traces": []teldb.ListTracesRow{{ID: 1, AppName: "web", Name: "/orders/{id}", Status: "internal_error", HttpStatus: 500, DurationMs: 30}}},
+		"trace": traceView{ops.Waterfall{Trace: teldb.Trace{ID: 1, AppName: "web", Name: "/orders/{id}", DurationMs: 1500, HttpStatus: 200, Status: "ok", TraceID: "abc"},
+			Rows: []ops.WaterfallRow{{Op: "http.server", Description: "/orders/{id}", WidthPct: 100, Ms: 1500}, {Op: "db", Description: "SELECT 1", Depth: 1, LeftPct: 10, WidthPct: 50, Ms: 750, Status: "internal_error"}}}, "2026-10-02 12:00:00 UTC"},
 	}
 	for name, data := range cases {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {

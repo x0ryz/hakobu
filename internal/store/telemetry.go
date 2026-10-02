@@ -17,15 +17,20 @@ import (
 // whenever it can't use the file.
 const telemetryFile = "telemetry.db"
 
-// eventRetention is how long errors, crashes and outages are kept; the
-// apps' logs go after PruneOldData's retentionDays.
+// eventRetention is how long errors, crashes, outages and usage are
+// kept; the apps' logs go after PruneOldData's retentionDays.
 const eventRetention = 30 * 24 * time.Hour
+
+// traceRetention is how long traces are kept.
+const traceRetention = 7 * 24 * time.Hour
 
 // telSecretColumns are the columns of telemetry.db sqlc maps to
 // secret.String (sqlc.yaml): apps' errors and logs may hold their users'
 // data.
 var telSecretColumns = map[string][]string{
 	"telemetry_events": {"message", "payload"},
+	// A span's description holds SQL and URLs, with their values.
+	"traces": {"slow_span", "payload"},
 }
 
 // openTelemetry opens telemetry.db in dir, starting a new one when it was
@@ -127,7 +132,12 @@ func (s *Store) deleteTelemetryOf(ctx context.Context, app string) error {
 			return err
 		}
 	}
-	return s.Tel.DeleteTelemetryOfApp(ctx, app)
+	for _, del := range []func(context.Context, string) error{s.Tel.DeleteTracesOfApp, s.Tel.DeleteTraceRoutesOfApp, s.Tel.DeleteTelemetryOfApp} {
+		if err := del(ctx, app); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pruneTelemetry deletes logs older than retentionDays and other telemetry
@@ -137,6 +147,13 @@ func (s *Store) pruneTelemetry(ctx context.Context, retentionDays int) error {
 		return err
 	}
 	if err := s.Tel.PruneEvents(ctx, timestamp(time.Now().Add(-eventRetention))); err != nil {
+		return err
+	}
+	traceCutoff := time.Now().Add(-traceRetention).Unix()
+	if err := s.Tel.PruneTraces(ctx, traceCutoff); err != nil {
+		return err
+	}
+	if err := s.Tel.PruneTraceRoutes(ctx, traceCutoff); err != nil {
 		return err
 	}
 	// The rings overwrite their own slots; this drops targets gone for good.

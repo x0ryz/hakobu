@@ -370,7 +370,7 @@
 </div>
 
 <div class="flex gap-5 border-b border-edge mb-6 overflow-x-auto">
-  {{range $t := list "overview" "variables" "deployments" "output" "errors" "worker"}}
+  {{range $t := list "overview" "variables" "deployments" "output" "errors" "performance" "worker"}}
   <button type="button" @click="tab='{{$t}}'" :class="tab==='{{$t}}' ? 'text-ink border-ink' : 'text-faint border-transparent hover:text-ink'" class="tab capitalize">{{$t}}</button>
   {{end}}
 </div>
@@ -560,6 +560,11 @@
   <div hx-get="/apps/{{.App.Name}}/errors" hx-trigger="load" hx-swap="innerHTML"></div>
 </div>
 
+<div x-show="tab==='performance'" x-cloak class="space-y-2">
+  <p class="text-xs text-faint">Requests and tasks traced by a Sentry SDK using the injected <span class="mono">SENTRY_DSN</span>, by route; the slow (1 s and over) and failed ones are kept whole for a week.</p>
+  <div hx-get="/apps/{{.App.Name}}/performance?range=24h" hx-trigger="load" hx-swap="innerHTML"></div>
+</div>
+
 <div x-show="tab==='worker'" x-cloak class="space-y-6">
   <p class="text-xs text-faint">A background process running the same image as the app with its own start command and no port. It restarts after every deploy.</p>
   {{with .Worker}}
@@ -615,6 +620,44 @@
 
 {{define "output"}}<pre class="console max-h-[32rem] overflow-y-auto">{{if .}}{{.}}{{else}}(no output){{end}}</pre>{{end}}
 
+{{define "performance"}}<div class="space-y-4">
+  <div class="flex gap-1">{{range list "24h" "7d"}}<button type="button" hx-get="/apps/{{$.App}}/performance?range={{.}}" hx-target="closest div.space-y-4" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if eq . $.Range}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">{{.}}</button>{{end}}</div>
+  {{if .Routes}}
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead><tr class="text-xs text-faint text-left"><th class="font-normal py-1">Route</th><th class="font-normal text-right">Requests</th><th class="font-normal text-right">p50</th><th class="font-normal text-right">p95</th><th class="font-normal text-right">Avg</th><th class="font-normal text-right">Failed</th></tr></thead>
+    <tbody>{{range .Routes}}
+      <tr class="border-t border-edge"><td class="py-1.5 mono break-all">{{.Name}}</td><td class="mono text-right text-dim">{{.Count}}</td><td class="mono text-right text-dim">{{.P50Ms}} ms</td><td class="mono text-right {{if or .P95Over (ge .P95Ms 1000)}}text-bad{{else}}text-dim{{end}}">{{if .P95Over}}&gt; {{end}}{{.P95Ms}} ms</td><td class="mono text-right text-dim">{{.AvgMs}} ms</td><td class="mono text-right {{if .Errors}}text-bad{{else}}text-dim{{end}}">{{printf "%.1f" .ErrorPct}}%</td></tr>
+    {{end}}</tbody>
+  </table>
+  </div>
+  {{else}}<p class="text-sm text-faint">No traces received{{if eq .Range "24h"}} in the last 24 hours{{end}}. To send them, set <span class="mono">traces_sample_rate</span> (e.g. 0.1, or 1.0 for every request) in the Sentry SDK's init.</p>{{end}}
+  {{with .Traces}}
+  <div class="space-y-1">
+    <h3 class="text-xs font-medium">Slow and failed, newest first</h3>
+    {{range .}}<a href="/apps/{{.AppName}}/traces/{{.ID}}" class="row text-sm"><span class="mono break-all">{{.Name}}</span><span class="mono shrink-0 {{if or (ge .HttpStatus 500) (and .Status (ne .Status "ok") (ne .Status "unknown"))}}text-bad{{else}}text-dim{{end}}">{{.DurationMs}} ms{{if .HttpStatus}} · {{.HttpStatus}}{{end}}{{if and .Status (ne .Status "ok")}} · {{.Status}}{{end}}</span></a>{{end}}
+  </div>
+  {{end}}
+</div>{{end}}
+
+{{define "trace"}}{{template "head" .Name}}{{template "nav"}}
+<a href="/apps/{{.AppName}}#performance" class="link">← {{.AppName}}</a>
+<div class="mt-1 mb-6">
+  <h1 class="text-xl font-semibold mono break-all">{{.Name}}</h1>
+  <p class="text-sm text-dim mono">{{.DurationMs}} ms{{if .HttpStatus}} · HTTP {{.HttpStatus}}{{end}}{{if .Status}} · {{.Status}}{{end}} · {{.At}} · trace {{.TraceID}}</p>
+</div>
+<div class="card">
+  <div class="space-y-1">{{range .Rows}}
+    <div class="grid grid-cols-12 gap-2 items-center text-xs">
+      <div class="col-span-5 truncate mono" style="padding-left: {{.Depth}}rem" title="{{.Op}} {{.Description}}"><span class="text-faint">{{.Op}}</span> {{.Description}}</div>
+      <div class="col-span-6 relative h-3 bg-zinc-50 rounded"><div class="absolute inset-y-0 rounded {{if and .Status (ne .Status "ok")}}bg-bad{{else}}bg-accent{{end}}" style="left: {{printf "%.2f" .LeftPct}}%; width: {{printf "%.2f" .WidthPct}}%"></div></div>
+      <div class="col-span-1 text-right mono text-dim">{{printf "%.0f" .Ms}}</div>
+    </div>
+  {{end}}</div>
+  {{if gt (len .Tx.Spans) (len .Rows)}}<p class="text-xs text-faint">Showing the first {{len .Rows}} spans.</p>{{end}}
+</div>
+{{template "foot"}}{{end}}
+
 {{define "usage"}}<div class="usage space-y-4">
   <div class="flex gap-1">{{range .Ranges}}<button type="button" hx-get="/usage?{{$.Query}}&amp;range={{.}}" hx-target="closest .usage" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if eq . $.Range}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">{{.}}</button>{{end}}</div>
   {{range .Charts}}
@@ -631,6 +674,7 @@
   <div class="console">
     <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if or (eq .Kind "error") (eq .Kind "oom") (eq .Kind "crash") (and (eq .Kind "health") (eq .Level "error"))}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
     <p class="mt-1">{{.Message}}</p>
+    {{if .TraceID}}<a href="/apps/{{.AppName}}/traces/by-trace/{{.TraceID}}" class="inline-block mt-1 text-zinc-500 hover:text-zinc-300 underline">its trace</a>{{end}}
   </div>
   {{else}}
   <p class="text-sm text-faint">Nothing received yet.</p>
