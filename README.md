@@ -81,12 +81,16 @@ with Email Routing on; where it's off, hakobu turns it on through
 domain itself would replace its MX records). A token made before v0.5 lacks the email permissions:
 give hakobu a new one with `setup --reconnect`.
 
-When the server, hakobu or the tunnel is down, hakobu can't email you itself. The
-**watchdog** (Settings → Notifications) is a Worker hakobu deploys to your Cloudflare
-account, free plan included: every minute it asks the panel's `/healthz` from outside
-and emails the same address when it stops answering and when it's back. It needs
-Workers Scripts Edit and Workers KV Storage Edit, which tokens made before it lack: add
-them to the token in Cloudflare, or use `setup --reconnect`.
+When the server, hakobu or the tunnel is down, hakobu can't email you itself. While
+emails are on, hakobu sets up a **watchdog**: a Worker in your Cloudflare account, free
+plan included, that asks the panel's `/healthz` from outside every minute and emails the
+same address when it stops answering and when it's back. You can turn it off in
+Settings → Notifications.
+
+Settings → Cloudflare token shows what hakobu's token can do, and the home page says when
+it lacks something a newer hakobu needs (tokens made before the watchdog lack Workers
+Scripts Edit and Workers KV Storage Edit). Replace the token right there: the link opens
+a new one with every permission filled in.
 
 ### Claude (MCP)
 

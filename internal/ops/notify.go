@@ -234,7 +234,10 @@ func SetupNotifications(s *store.Store, email, name, from string) error {
 	if hadPrev {
 		err = undoNotify(c, cf.AccountID, prev, addr.Address, n.RoutedDomain)
 	}
-	return errors.Join(err, refreshWatchdog(s))
+	if werr := EnsureWatchdog(s, true); werr != nil {
+		err = errors.Join(err, fmt.Errorf("the watchdog isn't set up: %w", werr))
+	}
+	return err
 }
 
 // senderDomain picks the domain to send from, the panel's host if from is
@@ -499,8 +502,13 @@ func noteCrash(s *store.Store, app, message string) {
 }
 
 // CheckForOwner mails the disk filling up and a master key the owner
-// hasn't downloaded; it's called hourly.
+// hasn't downloaded, checks the token and puts the watchdog back if it's
+// gone; it's called hourly.
 func CheckForOwner(s *store.Store) {
+	TokenPermissions(s, true)
+	if err := EnsureWatchdog(s, false); err != nil {
+		fmt.Println("watchdog:", err)
+	}
 	if disk, low := DiskUsage(); low {
 		problem(s, "disk", notifyAgain, "The server's disk is almost full",
 			"Disk: "+disk+". Deploys and databases fail on a full disk; free some space or clean up: "+panelURL("/settings"))

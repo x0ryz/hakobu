@@ -28,6 +28,15 @@ func (q *Queries) AddVolume(ctx context.Context, arg AddVolumeParams) error {
 	return err
 }
 
+const allowWatchdog = `-- name: AllowWatchdog :exec
+DELETE FROM watchdog_off
+`
+
+func (q *Queries) AllowWatchdog(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, allowWatchdog)
+	return err
+}
+
 const appsUsingDatabase = `-- name: AppsUsingDatabase :many
 SELECT name FROM apps WHERE linked_db = ? ORDER BY name
 `
@@ -2235,6 +2244,15 @@ func (q *Queries) TouchOAuthGrant(ctx context.Context, arg TouchOAuthGrantParams
 	return err
 }
 
+const turnWatchdogOff = `-- name: TurnWatchdogOff :exec
+INSERT OR IGNORE INTO watchdog_off (id) VALUES (1)
+`
+
+func (q *Queries) TurnWatchdogOff(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, turnWatchdogOff)
+	return err
+}
+
 const updateDeployLog = `-- name: UpdateDeployLog :exec
 UPDATE deploy_logs SET status = ?, output = ? WHERE id = ?
 `
@@ -2266,4 +2284,15 @@ func (q *Queries) UseOAuthToken(ctx context.Context, arg UseOAuthTokenParams) (i
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const watchdogTurnedOff = `-- name: WatchdogTurnedOff :one
+SELECT EXISTS (SELECT 1 FROM watchdog_off)
+`
+
+func (q *Queries) WatchdogTurnedOff(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, watchdogTurnedOff)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

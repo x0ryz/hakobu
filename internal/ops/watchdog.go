@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
@@ -33,16 +34,86 @@ func watchdogName() string {
 
 // WatchdogInfo describes the watchdog for Settings.
 type WatchdogInfo struct {
-	On     bool
-	Script string
+	On        bool
+	Script    string
+	TurnedOff bool   // by the owner
+	Err       string // why it isn't on, when hakobu tried
+}
+
+// watchdogErr is why the last attempt to deploy the watchdog failed.
+var watchdogErr struct {
+	sync.Mutex
+	msg string
+}
+
+func setWatchdogErr(err error) {
+	watchdogErr.Lock()
+	defer watchdogErr.Unlock()
+	watchdogErr.msg = ""
+	if err != nil {
+		watchdogErr.msg = err.Error()
+	}
 }
 
 func Watchdog(s *store.Store) WatchdogInfo {
-	w, err := s.GetWatchdog(ctx())
-	if err != nil {
-		return WatchdogInfo{}
+	off, _ := s.WatchdogTurnedOff(ctx())
+	info := WatchdogInfo{TurnedOff: off}
+	if w, err := s.GetWatchdog(ctx()); err == nil {
+		info.On, info.Script = true, w.Script
 	}
-	return WatchdogInfo{On: true, Script: w.Script}
+	watchdogErr.Lock()
+	info.Err = watchdogErr.msg
+	watchdogErr.Unlock()
+	return info
+}
+
+// EnsureWatchdog deploys the watchdog where it should run and doesn't:
+// emails are on, the owner didn't turn it off and the token allows. With
+// redeploy it's deployed again even if it runs, for new settings.
+func EnsureWatchdog(s *store.Store, redeploy bool) error {
+	if _, err := s.GetNotify(ctx()); err != nil {
+		return nil
+	}
+	if off, _ := s.WatchdogTurnedOff(ctx()); off {
+		return nil
+	}
+	if !canRunWatchdog(TokenPermissions(s, false)) {
+		setWatchdogErr(nil) // Settings shows the token's permissions
+		return nil
+	}
+	if w, err := s.GetWatchdog(ctx()); err == nil && !redeploy {
+		c, cf, err := cfClient(s)
+		if err != nil {
+			return err
+		}
+		if exists, err := c.WorkerExists(cf.AccountID, w.Script); err != nil || exists {
+			return err
+		}
+		fmt.Println("the watchdog's Worker is gone from Cloudflare: deploying it again")
+	}
+	err := EnableWatchdog(s)
+	setWatchdogErr(err)
+	return err
+}
+
+// TurnWatchdogOn undoes the owner's TurnWatchdogOff and deploys it.
+func TurnWatchdogOn(s *store.Store) error {
+	if err := s.AllowWatchdog(ctx()); err != nil {
+		return err
+	}
+	err := EnableWatchdog(s)
+	setWatchdogErr(err)
+	return err
+}
+
+// TurnWatchdogOff removes the watchdog and keeps hakobu from deploying it
+// again.
+func TurnWatchdogOff(s *store.Store) error {
+	if err := s.TurnWatchdogOff(ctx()); err != nil {
+		return err
+	}
+	setWatchdogErr(nil)
+	return DisableWatchdog(s)
 }
 
 // EnableWatchdog deploys the watchdog, or deploys it again for the current
@@ -103,16 +174,4 @@ func workersHint(err error) error {
 		return err
 	}
 	return fmt.Errorf("%w; the watchdog needs Workers Scripts Edit and Workers KV Storage Edit: add them to hakobu's token in Cloudflare (Manage account → API Tokens → Edit), or give hakobu a new token with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`", err)
-}
-
-// refreshWatchdog deploys the watchdog again after the notification
-// settings changed, if it's on.
-func refreshWatchdog(s *store.Store) error {
-	if _, err := s.GetWatchdog(ctx()); err != nil {
-		return nil
-	}
-	if err := EnableWatchdog(s); err != nil {
-		return fmt.Errorf("the watchdog still emails the old address: %w", err)
-	}
-	return nil
 }

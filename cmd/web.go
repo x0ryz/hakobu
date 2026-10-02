@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/github"
@@ -208,7 +209,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			fail(w, err)
 			return
 		}
-		render(w, "home", map[string]any{"Projects": projects})
+		render(w, "home", map[string]any{"Projects": projects, "Lacking": cloudflare.Lacking(ops.CachedTokenPermissions())})
 	})
 
 	action("POST /projects", func(r *http.Request) (string, error) {
@@ -649,6 +650,10 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
 			"Notify": ops.Notifications(s), "Watchdog": ops.Watchdog(s), "Update": ops.Updates(version),
+			"TokenURL": cloudflare.TokenTemplateURL("hakobu " + strings.Split(config.PublicHost(), ".")[0]),
+		}
+		if ops.CloudflareConnected(s) {
+			data["Token"] = ops.TokenPermissions(s, false)
 		}
 		if usage, err := ops.CurrentUsage(s); err == nil {
 			data["Usage"] = usageRows(usage)
@@ -700,11 +705,15 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		render(w, "notify-form", data)
 	})
 	action("POST /settings/watchdog", func(r *http.Request) (string, error) {
-		return "", ops.EnableWatchdog(s)
+		return "", ops.TurnWatchdogOn(s)
 	})
 
 	action("DELETE /settings/watchdog", func(r *http.Request) (string, error) {
-		return "", ops.DisableWatchdog(s)
+		return "", ops.TurnWatchdogOff(s)
+	})
+
+	action("POST /settings/cloudflare/token", func(r *http.Request) (string, error) {
+		return "", ops.ReplaceCloudflareToken(s, r.FormValue("token"))
 	})
 
 	action("POST /settings/notify/test", func(r *http.Request) (string, error) {

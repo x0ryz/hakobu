@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
@@ -36,6 +37,7 @@ type fakeEmail struct {
 	nextID    int
 	workers   map[string]workerUpload // the Workers uploaded, by name
 	kv        map[string]string       // KV namespace ID → title
+	noWorkers bool                    // the token lacks the Workers permissions
 }
 
 // workerUpload is what a Worker was uploaded with.
@@ -126,6 +128,22 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 			var m struct{ Subject string }
 			_ = json.Unmarshal(b, &m)
 			f.subjects = append(f.subjects, m.Subject)
+			ok(map[string]any{})
+		case f.noWorkers && (strings.Contains(r.URL.Path, "/workers/") || strings.Contains(r.URL.Path, "/storage/kv/")):
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []map[string]any{{"code": 10000, "message": "Authentication error"}}})
+		case route == "GET /accounts/acc/tokens/verify":
+			ok(map[string]string{"status": "active"})
+		case route == "GET /accounts/acc/cfd_tunnel", route == "GET /accounts/acc/workers/scripts":
+			ok([]any{})
+		case route == "GET /accounts/acc/r2/buckets":
+			ok(map[string]any{"buckets": []any{}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/accounts/acc/workers/scripts/") && strings.HasSuffix(r.URL.Path, "/settings"):
+			if _, exists := f.workers[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/accounts/acc/workers/scripts/"), "/settings")]; !exists {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []map[string]any{{"code": 10007, "message": "workers.api.error.script_not_found"}}})
+				return
+			}
 			ok(map[string]any{})
 		case route == "GET /accounts/acc/storage/kv/namespaces":
 			var list []map[string]string
@@ -228,6 +246,10 @@ func notifyStore(t *testing.T) *store.Store {
 	old := async
 	async = func(f func()) { f() }
 	t.Cleanup(func() { async = old })
+	tokenPerms.Lock()
+	tokenPerms.at, tokenPerms.perms = time.Time{}, nil // checked for each panel
+	tokenPerms.Unlock()
+	setWatchdogErr(nil)
 	problems.Lock()
 	problems.mailed = nil
 	problems.Unlock()

@@ -216,6 +216,10 @@ type Watchdog struct {
 	CreatedAt     string
 }
 
+type WatchdogOff struct {
+	ID int64
+}
+
 type WebhookDelivery struct {
 	ID        string
 	CreatedAt string

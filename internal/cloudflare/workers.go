@@ -110,3 +110,12 @@ func isNotFound(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not found") || strings.Contains(msg, "not_found")
 }
+
+// WorkerExists reports whether the account has the Worker name.
+func (c Client) WorkerExists(accountID, name string) (bool, error) {
+	err := c.call("GET", "/accounts/"+accountID+"/workers/scripts/"+url.PathEscape(name)+"/settings", nil, nil)
+	if isNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}

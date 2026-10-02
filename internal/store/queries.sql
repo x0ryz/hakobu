@@ -385,3 +385,12 @@ ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = exclu
 
 -- name: DeleteWatchdog :exec
 DELETE FROM watchdog;
+
+-- name: WatchdogTurnedOff :one
+SELECT EXISTS (SELECT 1 FROM watchdog_off);
+
+-- name: TurnWatchdogOff :exec
+INSERT OR IGNORE INTO watchdog_off (id) VALUES (1);
+
+-- name: AllowWatchdog :exec
+DELETE FROM watchdog_off;

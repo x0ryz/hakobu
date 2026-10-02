@@ -149,6 +149,7 @@
 </body></html>{{end}}
 
 {{define "home"}}{{template "head" ""}}{{template "nav"}}
+{{with .Lacking}}<a href="/settings#cloudflare" class="block mb-4 rounded-xl border border-warn/40 bg-amber-50 px-4 py-3 text-sm">hakobu's Cloudflare token lacks {{range $i, $p := .}}{{if $i}}, {{end}}<span class="font-medium">{{$p.Name}}</span> ({{$p.For}}){{end}}. <span class="underline">Replace it in Settings</span>.</a>{{end}}
 <div class="flex items-center justify-between mb-4">
   <h1 class="text-lg font-semibold">Projects</h1>
 </div>
@@ -839,16 +840,31 @@
     {{else}}<p class="text-xs text-faint">Needs Cloudflare connected first.</p>{{end}}
     {{if .Notify.On}}
     <div class="flex items-start justify-between gap-3 border-t border-edge pt-4">
-      <div>
-        <h3 class="text-sm font-medium">Watchdog {{if .Watchdog.On}}<span class="text-xs font-normal text-good">on</span>{{end}}</h3>
-        <p class="text-sm text-dim">When the server, hakobu or the tunnel is down, hakobu can't email you about it. The watchdog is a Worker in your Cloudflare account (<span class="mono">{{if .Watchdog.On}}{{.Watchdog.Script}}{{else}}hakobu-watchdog-…{{end}}</span>) that checks the panel every minute from outside and emails you when it stops answering, and when it's back. It runs on Cloudflare's free plan.</p>
-        {{if not .Watchdog.On}}<p class="text-xs text-faint">Needs Workers Scripts Edit and Workers KV Storage Edit on hakobu's Cloudflare token: tokens made before this version lack them.</p>{{end}}
+      <div class="space-y-1">
+        <h3 class="text-sm font-medium">Watchdog {{if .Watchdog.On}}<span class="text-xs font-normal text-good">on</span>{{else}}<span class="text-xs font-normal text-faint">off</span>{{end}}</h3>
+        <p class="text-sm text-dim">When the server, hakobu or the tunnel is down, hakobu can't email you about it. The watchdog is a Worker in your Cloudflare account{{if .Watchdog.On}} (<span class="mono">{{.Watchdog.Script}}</span>){{end}} that checks the panel every minute from outside and emails you when it stops answering, and when it's back. hakobu sets it up on its own while emails are on; it runs on Cloudflare's free plan.</p>
+        {{if .Watchdog.Err}}<p class="text-sm text-bad">{{.Watchdog.Err}}</p>
+        {{else if and (not .Watchdog.On) (not .Watchdog.TurnedOff)}}<p class="text-xs text-faint">Waiting for hakobu's token to get Workers Scripts Edit and Workers KV Storage Edit: see <a href="#cloudflare" class="underline">Cloudflare token</a>.</p>{{end}}
       </div>
-      {{if .Watchdog.On}}<button hx-delete="/settings/watchdog" hx-confirm="Remove the watchdog's Worker from Cloudflare?" class="btn shrink-0">Turn off</button>
-      {{else}}<button hx-post="/settings/watchdog" class="btn shrink-0">Turn on</button>{{end}}
+      {{if .Watchdog.On}}<button hx-delete="/settings/watchdog" hx-confirm="Turn the watchdog off? hakobu removes its Worker from Cloudflare and doesn't set it up again until you turn it on." class="btn shrink-0">Turn off</button>
+      {{else if .Watchdog.TurnedOff}}<button hx-post="/settings/watchdog" class="btn shrink-0">Turn on</button>{{end}}
     </div>
     {{end}}
   </div>
+
+  {{with .Token}}
+  <div id="cloudflare" class="card">
+    <h2 class="h2">Cloudflare token</h2>
+    <p class="text-sm text-dim">What hakobu's API token can do, checked every hour; a newer hakobu may need more than an older token has.</p>
+    <ul class="text-sm space-y-1">{{range .}}
+      <li class="flex items-baseline gap-2">{{if .Missing}}<span class="text-bad">✗</span>{{else if .Unknown}}<span class="text-faint">?</span>{{else}}<span class="text-good">✓</span>{{end}}<span class="{{if .Missing}}text-bad{{end}}">{{.Name}}</span><span class="text-xs text-faint">{{.For}}{{if .Unknown}} · couldn't check{{end}}</span></li>
+    {{end}}</ul>
+    <form hx-post="/settings/cloudflare/token" class="space-y-2 border-t border-edge pt-4">
+      <p class="text-sm text-dim">Replace the token: open <a href="{{$.TokenURL}}" target="_blank" rel="noopener" class="underline">this link</a> (the permissions are filled in), select <span class="font-medium">Continue to summary</span> → <span class="font-medium">Create Token</span>, and paste it here. It must be for the same Cloudflare account. Then delete the old token in Cloudflare.</p>
+      <div class="flex gap-2"><input name="token" type="password" required autocomplete="off" placeholder="New API token" class="input flex-1 mono"><button class="btn">Replace</button></div>
+    </form>
+  </div>
+  {{end}}
 
   <div id="ai-apps" class="card">
     <h2 class="h2">AI apps</h2>
