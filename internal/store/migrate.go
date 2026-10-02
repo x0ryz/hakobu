@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,12 +13,23 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// migrate applies migrations/NNN_*.sql in file-name order. PRAGMA
+//go:embed telemetry/migrations/*.sql
+var telemetryMigrationFiles embed.FS
+
+// errNewerSchema: the database was migrated by a newer hakobu.
+var errNewerSchema = errors.New("upgrade hakobu")
+
+// migrate applies the panel's migrations.
+func migrate(db *sql.DB) error {
+	return migrateWith(db, migrationFiles, "migrations/*.sql")
+}
+
+// migrateWith applies the files matching pattern in file-name order. PRAGMA
 // user_version holds how many have been applied; each one runs in its own
 // transaction together with the version bump. Never edit an applied
 // migration, add a new file instead.
-func migrate(db *sql.DB) error {
-	names, err := fs.Glob(migrationFiles, "migrations/*.sql")
+func migrateWith(db *sql.DB, files fs.FS, pattern string) error {
+	names, err := fs.Glob(files, pattern)
 	if err != nil {
 		return err
 	}
@@ -28,11 +40,11 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if version > len(names) {
-		return fmt.Errorf("database is at schema version %d, this hakobu only knows %d: upgrade hakobu", version, len(names))
+		return fmt.Errorf("database is at schema version %d, this hakobu only knows %d: %w", version, len(names), errNewerSchema)
 	}
 
 	for i := version; i < len(names); i++ {
-		body, err := migrationFiles.ReadFile(names[i])
+		body, err := fs.ReadFile(files, names[i])
 		if err != nil {
 			return err
 		}

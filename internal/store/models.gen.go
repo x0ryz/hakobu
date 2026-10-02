@@ -188,16 +188,6 @@ type Storage struct {
 	Region          string
 }
 
-type TelemetryEvent struct {
-	ID        int64
-	AppName   string
-	Kind      string
-	Level     string
-	Message   secret.String
-	Payload   secret.String
-	CreatedAt string
-}
-
 type Volume struct {
 	AppName   string
 	Name      string

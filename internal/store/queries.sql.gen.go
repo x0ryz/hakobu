@@ -324,31 +324,6 @@ func (q *Queries) CreateStorage(ctx context.Context, arg CreateStorageParams) er
 	return err
 }
 
-const createTelemetryEvent = `-- name: CreateTelemetryEvent :exec
-
-INSERT INTO telemetry_events (app_name, kind, level, message, payload) VALUES (?, ?, ?, ?, ?)
-`
-
-type CreateTelemetryEventParams struct {
-	AppName string
-	Kind    string
-	Level   string
-	Message secret.String
-	Payload secret.String
-}
-
-// Telemetry
-func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryEventParams) error {
-	_, err := q.db.ExecContext(ctx, createTelemetryEvent,
-		arg.AppName,
-		arg.Kind,
-		arg.Level,
-		arg.Message,
-		arg.Payload,
-	)
-	return err
-}
-
 const createVolumeBackup = `-- name: CreateVolumeBackup :one
 INSERT INTO volume_backups (app_name, volume, object_key, parts, size_bytes, sha256, file_key) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
 `
@@ -521,15 +496,6 @@ DELETE FROM storages WHERE name = ?
 
 func (q *Queries) DeleteStorage(ctx context.Context, name string) error {
 	_, err := q.db.ExecContext(ctx, deleteStorage, name)
-	return err
-}
-
-const deleteTelemetryOfApp = `-- name: DeleteTelemetryOfApp :exec
-DELETE FROM telemetry_events WHERE app_name = ?
-`
-
-func (q *Queries) DeleteTelemetryOfApp(ctx context.Context, appName string) error {
-	_, err := q.db.ExecContext(ctx, deleteTelemetryOfApp, appName)
 	return err
 }
 
@@ -936,30 +902,6 @@ func (q *Queries) GetStorage(ctx context.Context, name string) (Storage, error) 
 	return i, err
 }
 
-const getTelemetryEvent = `-- name: GetTelemetryEvent :one
-SELECT id, app_name, kind, level, message, payload, created_at FROM telemetry_events WHERE id = ? AND app_name = ?
-`
-
-type GetTelemetryEventParams struct {
-	ID      int64
-	AppName string
-}
-
-func (q *Queries) GetTelemetryEvent(ctx context.Context, arg GetTelemetryEventParams) (TelemetryEvent, error) {
-	row := q.db.QueryRowContext(ctx, getTelemetryEvent, arg.ID, arg.AppName)
-	var i TelemetryEvent
-	err := row.Scan(
-		&i.ID,
-		&i.AppName,
-		&i.Kind,
-		&i.Level,
-		&i.Message,
-		&i.Payload,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getVolumeBackup = `-- name: GetVolumeBackup :one
 SELECT id, app_name, volume, object_key, parts, size_bytes, sha256, file_key, created_at, verified_at, verify_error, files FROM volume_backups WHERE id = ?
 `
@@ -998,22 +940,6 @@ func (q *Queries) GetWorker(ctx context.Context, appName string) (Worker, error)
 		&i.Env,
 	)
 	return i, err
-}
-
-const lastTelemetryOfKind = `-- name: LastTelemetryOfKind :one
-SELECT created_at FROM telemetry_events WHERE app_name = ? AND kind = ? ORDER BY id DESC LIMIT 1
-`
-
-type LastTelemetryOfKindParams struct {
-	AppName string
-	Kind    string
-}
-
-func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKindParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, lastTelemetryOfKind, arg.AppName, arg.Kind)
-	var created_at string
-	err := row.Scan(&created_at)
-	return created_at, err
 }
 
 const listAllBackups = `-- name: ListAllBackups :many
@@ -1671,46 +1597,6 @@ func (q *Queries) ListStoragesByProject(ctx context.Context, projectID int64) ([
 	return items, nil
 }
 
-const listTelemetryEvents = `-- name: ListTelemetryEvents :many
-SELECT id, app_name, kind, level, message, payload, created_at FROM telemetry_events WHERE app_name = ? ORDER BY id DESC LIMIT ?
-`
-
-type ListTelemetryEventsParams struct {
-	AppName string
-	Limit   int64
-}
-
-func (q *Queries) ListTelemetryEvents(ctx context.Context, arg ListTelemetryEventsParams) ([]TelemetryEvent, error) {
-	rows, err := q.db.QueryContext(ctx, listTelemetryEvents, arg.AppName, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TelemetryEvent
-	for rows.Next() {
-		var i TelemetryEvent
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.Kind,
-			&i.Level,
-			&i.Message,
-			&i.Payload,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listVolumeBackups = `-- name: ListVolumeBackups :many
 SELECT id, app_name, volume, object_key, parts, size_bytes, sha256, file_key, created_at, verified_at, verify_error, files FROM volume_backups WHERE app_name = ? AND volume = ? ORDER BY id DESC LIMIT ?
 `
@@ -1835,15 +1721,6 @@ DELETE FROM oauth_tokens WHERE expires_at < ?
 
 func (q *Queries) PruneOAuthTokens(ctx context.Context, expiresAt string) error {
 	_, err := q.db.ExecContext(ctx, pruneOAuthTokens, expiresAt)
-	return err
-}
-
-const pruneTelemetry = `-- name: PruneTelemetry :exec
-DELETE FROM telemetry_events WHERE created_at < ?
-`
-
-func (q *Queries) PruneTelemetry(ctx context.Context, createdAt string) error {
-	_, err := q.db.ExecContext(ctx, pruneTelemetry, createdAt)
 	return err
 }
 

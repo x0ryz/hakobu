@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 func TestHealthOutages(t *testing.T) {
@@ -28,7 +28,7 @@ func TestHealthOutages(t *testing.T) {
 	if got, want := f.sent(), []string{"web: not responding", "web: responding again"}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("sent %q, want %q", got, want)
 	}
-	events, err := s.ListTelemetryEvents(ctx(), store.ListTelemetryEventsParams{AppName: "web", Limit: 10})
+	events, err := s.Tel.ListTelemetryEvents(ctx(), teldb.ListTelemetryEventsParams{AppName: "web", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

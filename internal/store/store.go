@@ -17,6 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/x0ryz/hakobu/internal/secret"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 type Store struct {
@@ -24,6 +25,11 @@ type Store struct {
 	db      *sql.DB
 	dir     string // the database's directory, with the sealed snapshots
 	keyPath string
+
+	// Tel is the apps' telemetry, in a database of its own next to this
+	// one (telemetry.go).
+	Tel   *teldb.Queries
+	telDB *sql.DB
 }
 
 // Open opens the database at path with its master key next to it, as tests
@@ -35,17 +41,34 @@ func Open(path string) (*Store, error) {
 // OpenWithKey opens the database at path, its secrets encrypted with the
 // master key in keyPath (created if there's none and nothing needs one).
 func OpenWithKey(path, keyPath string) (*Store, error) {
+	dir := filepath.Dir(path)
+	keyMissing := secret.KeyMissing(keyPath)
+	telDB, err := openTelemetry(dir, keyMissing)
+	if err != nil {
+		return nil, err
+	}
 	// WAL + busy_timeout: background deploys and pollers write while the
 	// dashboard reads.
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
+	moved := false
+	if !keyMissing {
+		if moved, err = moveTelemetry(db, telDB, filepath.Join(dir, telemetryFile)); err != nil {
+			return nil, fmt.Errorf("moving telemetry to %s: %w", telemetryFile, err)
+		}
+	}
 	if err := migrate(db); err != nil {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	s := &Store{Queries: New(db), db: db, dir: filepath.Dir(path), keyPath: keyPath}
-	if err := checkKeyNotLost(db, s.keyPath, secret.KeyMissing(s.keyPath)); err != nil {
+	if moved { // give back the space the telemetry took
+		if _, err := db.Exec(`VACUUM`); err != nil {
+			fmt.Println("failed to compact", path+":", err)
+		}
+	}
+	s := &Store{Queries: New(db), db: db, dir: dir, keyPath: keyPath, Tel: teldb.New(telDB), telDB: telDB}
+	if err := checkKeyNotLost(db, s.keyPath, keyMissing); err != nil {
 		return nil, err
 	}
 	if err := secret.LoadKey(s.keyPath); err != nil {
@@ -93,10 +116,8 @@ var secretColumns = map[string][]string{
 	// The keys of backups in the bucket (secret.NewFileWriterKey).
 	"backups":        {"file_key"},
 	"volume_backups": {"file_key"},
-	// Apps' errors, logs and traces (they may hold their users' data) and
-	// build output (scripts print secrets now and then).
-	"telemetry_events": {"message", "payload"},
-	"deploy_logs":      {"output"},
+	// Build output: scripts print secrets now and then.
+	"deploy_logs": {"output"},
 }
 
 // RotateMasterKey encrypts every secret with a new master key, so a copy
@@ -109,14 +130,36 @@ func (s *Store) RotateMasterKey() error {
 }
 
 // finishRotation re-encrypts every secret with the new key in one
-// transaction, then retires the old key.
+// transaction, then retires the old key. The telemetry follows in its own;
+// what of it can't be re-encrypted is dropped, it's only telemetry.
 func (s *Store) finishRotation() error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for table, cols := range secretColumns {
+	if err := reencrypt(tx, secretColumns); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := s.reencryptTelemetry(); err != nil {
+		fmt.Println("master key rotation: dropping the telemetry, which can't be re-encrypted:", err)
+		s.dropTelemetry()
+	}
+	s.rewrapSealedFiles()
+	// The copy kept for rolling hakobu back holds secrets under the old
+	// key: putting it back would leave them unreadable.
+	if err := os.Remove(filepath.Join(s.dir, "hakobu.db.prev")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Println("master key rotation: the database copy from before the last update is left:", err)
+	}
+	return secret.FinishRotation(s.keyPath)
+}
+
+// reencrypt encrypts the columns with the current key.
+func reencrypt(tx *sql.Tx, columns map[string][]string) error {
+	for table, cols := range columns {
 		for _, col := range cols {
 			rows, err := tx.Query(fmt.Sprintf(`SELECT rowid, %s FROM %s WHERE %s != ''`, col, table, col))
 			if err != nil {
@@ -151,16 +194,7 @@ func (s *Store) finishRotation() error {
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.rewrapSealedFiles()
-	// The copy kept for rolling hakobu back holds secrets under the old
-	// key: putting it back would leave them unreadable.
-	if err := os.Remove(filepath.Join(s.dir, "hakobu.db.prev")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Println("master key rotation: the database copy from before the last update is left:", err)
-	}
-	return secret.FinishRotation(s.keyPath)
+	return nil
 }
 
 // rewrapSealedFiles moves the database snapshots next to the database
@@ -220,7 +254,7 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	q := s.WithTx(tx)
 	// Backups of its volumes stay in the bucket, but a new app of the same
 	// name mustn't list (and rotate away) them.
-	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteVolumeBackupsOfApp, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
+	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteVolumeBackupsOfApp, q.DeleteDeployLogsOfApp, q.DeleteApp} {
 		if err := del(ctx, name); err != nil {
 			return err
 		}
@@ -230,7 +264,10 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.deleteTelemetryOf(ctx, name)
 }
 
 // Owner returns the GitHub account that claimed the panel; its GitHubID is
@@ -274,14 +311,15 @@ func (s *Store) EndSession(ctx context.Context, token string) error {
 	return s.DeleteSession(ctx, sessionID(token))
 }
 
-// PruneOldData deletes logs and telemetry older than retentionDays, and
+// PruneOldData deletes deploy logs and apps' logs older than retentionDays,
+// the rest of the telemetry after a month, and
 // sessions and OAuth tokens that expired.
 func (s *Store) PruneOldData(ctx context.Context, retentionDays int) error {
 	cutoff := timestamp(time.Now().AddDate(0, 0, -retentionDays))
 	if err := s.PruneDeployLogs(ctx, cutoff); err != nil {
 		return err
 	}
-	if err := s.PruneTelemetry(ctx, cutoff); err != nil {
+	if err := s.pruneTelemetry(ctx, retentionDays); err != nil {
 		return err
 	}
 	if err := s.DeleteExpiredSessions(ctx, timestamp(time.Now())); err != nil {

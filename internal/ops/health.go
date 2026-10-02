@@ -10,6 +10,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 // healthFailures is how many checks in a row an app fails before it counts
@@ -103,7 +104,7 @@ func noteHealth(s *store.Store, app string, ok bool, why string) {
 }
 
 func recordHealth(s *store.Store, app, level, message string) {
-	if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
+	if err := s.Tel.CreateTelemetryEvent(ctx(), teldb.CreateTelemetryEventParams{
 		AppName: app, Kind: "health", Level: level, Message: secret.String(message),
 	}); err != nil {
 		fmt.Println("failed to record the health of", app+":", err)

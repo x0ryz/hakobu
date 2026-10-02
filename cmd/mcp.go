@@ -14,6 +14,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/ops"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 // The MCP endpoint lets Claude look at apps, their deploys, logs and
@@ -227,7 +228,7 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			if limit <= 0 {
 				limit = 20
 			}
-			events, err := s.ListTelemetryEvents(ctx, store.ListTelemetryEventsParams{AppName: in.App, Limit: int64(min(limit, 100))})
+			events, err := s.Tel.ListTelemetryEvents(ctx, teldb.ListTelemetryEventsParams{AppName: in.App, Limit: int64(min(limit, 100))})
 			if err != nil {
 				return nil, out, err
 			}
@@ -243,7 +244,7 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			App string `json:"app" jsonschema:"the app's name"`
 			ID  int64  `json:"id" jsonschema:"the error's id from list_errors"`
 		}) (*mcp.CallToolResult, mcpError, error) {
-			e, err := s.GetTelemetryEvent(ctx, store.GetTelemetryEventParams{ID: in.ID, AppName: in.App})
+			e, err := s.Tel.GetTelemetryEvent(ctx, teldb.GetTelemetryEventParams{ID: in.ID, AppName: in.App})
 			if err != nil {
 				return nil, mcpError{}, fmt.Errorf("no error %d of %s", in.ID, in.App)
 			}

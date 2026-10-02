@@ -15,6 +15,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/detect"
 	"github.com/x0ryz/hakobu/internal/ops"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 	"github.com/x0ryz/hakobu/internal/update"
 )
 
@@ -39,7 +40,7 @@ func TestTemplatesRender(t *testing.T) {
 			}},
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
-		"errors":  []store.TelemetryEvent{{Kind: "error", Message: "boom"}},
+		"errors":  []teldb.TelemetryEvent{{Kind: "error", Message: "boom"}},
 		"database": map[string]any{"DB": db, "Project": project, "Ready": true, "Env": splitEnv([]string{"A=1"}), "BackupBucket": "hakobu-backups-1", "Backups": []store.Backup{{ObjectKey: "k", SizeBytes: 2048}, {ID: 2, VerifiedAt: "t", Tables: 3}, {ID: 3, VerifiedAt: "t", VerifyError: "boom"}}, "UsedBy": []string{"web"},
 			"Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
 		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1",

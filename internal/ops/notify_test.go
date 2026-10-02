@@ -17,6 +17,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 // fakeEmail is Cloudflare's API for one zone, example.com, as far as email
@@ -345,7 +346,7 @@ func TestCrashesOfLiveContainers(t *testing.T) {
 	recordDeath(s, "web-"+app.ActiveSlot, "web", deploy.Death{ExitCode: "1"}) // restarted, crashed again
 	recordDeath(s, "web-worker", "web", deploy.Death{OOM: true})
 
-	if at, _ := s.LastTelemetryOfKind(ctx(), store.LastTelemetryOfKindParams{AppName: "web", Kind: "crash"}); at == "" {
+	if at, _ := s.Tel.LastTelemetryOfKind(ctx(), teldb.LastTelemetryOfKindParams{AppName: "web", Kind: "crash"}); at == "" {
 		t.Error("the crash isn't in the Errors tab")
 	}
 	if got, want := f.sent(), []string{"web: crashed", "web: out of memory"}; strings.Join(got, "|") != strings.Join(want, "|") {

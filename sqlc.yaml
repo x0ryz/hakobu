@@ -63,11 +63,23 @@ sql:
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
           - column: deploy_logs.output
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
-          - column: telemetry_events.message
-            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
-          - column: telemetry_events.payload
-            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
           - column: backups.file_key
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
           - column: volume_backups.file_key
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+  # Telemetry lives in its own database, which isn't backed up.
+  - engine: sqlite
+    schema: internal/store/telemetry/migrations
+    queries: internal/store/telemetry/queries.sql
+    gen:
+      go:
+        package: teldb
+        out: internal/store/teldb
+        output_models_file_name: models.gen.go
+        output_db_file_name: db.gen.go
+        output_files_suffix: .gen
+        overrides:
+          - column: telemetry_events.message
+            go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}
+          - column: telemetry_events.payload
             go_type: {import: github.com/x0ryz/hakobu/internal/secret, type: String}

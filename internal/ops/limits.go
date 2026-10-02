@@ -9,6 +9,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 // SetLimits caps the memory and CPUs of the app and its worker from the
@@ -67,7 +68,7 @@ func recordDeath(s *store.Store, container, appName string, d deploy.Death) {
 	default:
 		return
 	}
-	if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
+	if err := s.Tel.CreateTelemetryEvent(ctx(), teldb.CreateTelemetryEventParams{
 		AppName: app.Name, Kind: kind, Level: "fatal", Message: secret.String(message),
 	}); err != nil {
 		fmt.Println("failed to record that", container, "stopped:", err)
@@ -82,6 +83,6 @@ func recordDeath(s *store.Store, container, appName string, d deploy.Death) {
 // LastOOM is when the app or its worker last ran out of memory, "" if not
 // within the retention period.
 func LastOOM(s *store.Store, app string) string {
-	at, _ := s.LastTelemetryOfKind(ctx(), store.LastTelemetryOfKindParams{AppName: app, Kind: "oom"})
+	at, _ := s.Tel.LastTelemetryOfKind(ctx(), teldb.LastTelemetryOfKindParams{AppName: app, Kind: "oom"})
 	return at
 }

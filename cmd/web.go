@@ -23,6 +23,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/ops"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 //go:embed web.html
@@ -514,7 +515,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	handle("GET /apps/{a}/errors", func(w http.ResponseWriter, r *http.Request) {
-		events, err := s.ListTelemetryEvents(r.Context(), store.ListTelemetryEventsParams{AppName: r.PathValue("a"), Limit: 50})
+		events, err := s.Tel.ListTelemetryEvents(r.Context(), teldb.ListTelemetryEventsParams{AppName: r.PathValue("a"), Limit: 50})
 		if err != nil {
 			fail(w, err)
 			return

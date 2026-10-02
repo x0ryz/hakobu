@@ -15,6 +15,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/ops"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 // maxEnvelopeBytes caps the decompressed size, guarding against gzip bombs.
@@ -133,7 +134,7 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 			if saved++; saved > maxEventsPerEnvelope {
 				return
 			}
-			if err := s.CreateTelemetryEvent(r.Context(), store.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload)}); err != nil {
+			if err := s.Tel.CreateTelemetryEvent(r.Context(), teldb.CreateTelemetryEventParams{AppName: app.Name, Kind: kind, Level: sum.Level, Message: secret.String(sum.Message), Payload: secret.String(payload)}); err != nil {
 				fmt.Println("ingest: failed to store event:", err)
 			}
 		}

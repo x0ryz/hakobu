@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/secret"
+	"github.com/x0ryz/hakobu/internal/store/teldb"
 )
 
 func TestStore(t *testing.T) {
@@ -241,9 +243,11 @@ func TestSecretColumnsMatchSqlc(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := map[string]bool{}
-	for table, cols := range secretColumns {
-		for _, c := range cols {
-			listed[table+"."+c] = true
+	for _, columns := range []map[string][]string{secretColumns, telSecretColumns} {
+		for table, cols := range columns {
+			for _, c := range cols {
+				listed[table+"."+c] = true
+			}
 		}
 	}
 	lines := strings.Split(string(b), "\n")
@@ -277,7 +281,7 @@ func TestLogsEncryptedAtRest(t *testing.T) {
 	if err := s.CreateApp(ctx, CreateAppParams{ProjectID: p.ID, Name: "web", Repo: "o/r", BuildStrategy: "railpack"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateTelemetryEvent(ctx, CreateTelemetryEventParams{AppName: "web", Kind: "error", Level: "error", Message: "user alice@example.com", Payload: `{"ip":"203.0.113.9"}`}); err != nil {
+	if err := s.Tel.CreateTelemetryEvent(ctx, teldb.CreateTelemetryEventParams{AppName: "web", Kind: "error", Level: "error", Message: "user alice@example.com", Payload: `{"ip":"203.0.113.9"}`}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveWorker(ctx, SaveWorkerParams{AppName: "web", Name: "w", Command: "worker --token=hunter2"}); err != nil {
@@ -291,13 +295,13 @@ func TestLogsEncryptedAtRest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, q := range []string{
-		`SELECT message || payload FROM telemetry_events`,
-		`SELECT command FROM workers`,
-		`SELECT output FROM deploy_logs`,
+	for q, db := range map[string]*sql.DB{
+		`SELECT message || payload FROM telemetry_events`: s.telDB,
+		`SELECT command FROM workers`:                     s.db,
+		`SELECT output FROM deploy_logs`:                  s.db,
 	} {
 		var raw string
-		if err := s.db.QueryRow(q).Scan(&raw); err != nil {
+		if err := db.QueryRow(q).Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(raw, "hunter2") || strings.Contains(raw, "alice") || strings.Contains(raw, "203.0.113") {

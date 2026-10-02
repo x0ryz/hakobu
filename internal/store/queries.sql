@@ -279,23 +279,6 @@ DELETE FROM deploy_logs WHERE app_name = ?;
 -- name: PruneDeployLogs :exec
 DELETE FROM deploy_logs WHERE created_at < ?;
 
--- Telemetry
-
--- name: CreateTelemetryEvent :exec
-INSERT INTO telemetry_events (app_name, kind, level, message, payload) VALUES (?, ?, ?, ?, ?);
-
--- name: ListTelemetryEvents :many
-SELECT * FROM telemetry_events WHERE app_name = ? ORDER BY id DESC LIMIT ?;
-
--- name: DeleteTelemetryOfApp :exec
-DELETE FROM telemetry_events WHERE app_name = ?;
-
--- name: LastTelemetryOfKind :one
-SELECT created_at FROM telemetry_events WHERE app_name = ? AND kind = ? ORDER BY id DESC LIMIT 1;
-
--- name: PruneTelemetry :exec
-DELETE FROM telemetry_events WHERE created_at < ?;
-
 -- Cloudflare
 
 -- name: GetCloudflare :one
@@ -390,5 +373,3 @@ UPDATE oauth_tokens SET used_at = ? WHERE id = ? AND used_at = '';
 -- name: PruneOAuthTokens :exec
 DELETE FROM oauth_tokens WHERE expires_at < ?;
 
--- name: GetTelemetryEvent :one
-SELECT * FROM telemetry_events WHERE id = ? AND app_name = ?;
