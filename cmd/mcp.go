@@ -293,10 +293,11 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			return nil, out, nil
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes, out-of-memory kills and health check outages of an app, newest first: what its Sentry SDK sent and what hakobu saw.", Annotations: readOnly},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes, out-of-memory kills and health check outages of an app, newest first: what its Sentry SDK sent and what hakobu saw. With include_logs, the logs its SDK sent too.", Annotations: readOnly},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
-			App   string `json:"app" jsonschema:"the app's name"`
-			Limit int    `json:"limit,omitempty" jsonschema:"up to 100; default 20"`
+			App         string `json:"app" jsonschema:"the app's name"`
+			Limit       int    `json:"limit,omitempty" jsonschema:"up to 100; default 20"`
+			IncludeLogs bool   `json:"include_logs,omitempty" jsonschema:"also the logs the app's Sentry SDK sent"`
 		}) (*mcp.CallToolResult, struct {
 			Errors []mcpError `json:"errors"`
 		}, error) {
@@ -310,7 +311,7 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			if limit <= 0 {
 				limit = 20
 			}
-			events, err := s.Tel.ListTelemetryEvents(ctx, teldb.ListTelemetryEventsParams{AppName: in.App, Limit: int64(min(limit, 100))})
+			events, err := ops.AppEvents(s, in.App, in.IncludeLogs, int64(min(limit, 100)))
 			if err != nil {
 				return nil, out, err
 			}

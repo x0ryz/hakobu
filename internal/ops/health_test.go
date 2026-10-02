@@ -43,3 +43,22 @@ func TestHealthOutages(t *testing.T) {
 		t.Errorf("recorded %s, want the outage and its end", got)
 	}
 }
+
+// The Errors tab leaves the app's logs out unless asked: they'd bury the
+// problems.
+func TestAppEventsWithoutLogs(t *testing.T) {
+	s := notifyStore(t)
+	for _, kind := range []string{"error", "log", "log", "crash", "log"} {
+		if err := s.Tel.CreateTelemetryEvent(ctx(), teldb.CreateTelemetryEventParams{AppName: "web", Kind: kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	problems, err := AppEvents(s, "web", false, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := AppEvents(s, "web", true, 10)
+	if len(problems) != 2 || problems[0].Kind != "crash" || len(all) != 5 {
+		t.Errorf("problems %v, all %d", problems, len(all))
+	}
+}

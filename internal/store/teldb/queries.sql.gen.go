@@ -288,6 +288,47 @@ func (q *Queries) LatestSamples(ctx context.Context, arg LatestSamplesParams) ([
 	return items, nil
 }
 
+const listProblems = `-- name: ListProblems :many
+SELECT id, app_name, kind, level, message, payload, created_at, trace_id FROM telemetry_events WHERE app_name = ? AND kind != 'log' ORDER BY id DESC LIMIT ?
+`
+
+type ListProblemsParams struct {
+	AppName string
+	Limit   int64
+}
+
+func (q *Queries) ListProblems(ctx context.Context, arg ListProblemsParams) ([]TelemetryEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listProblems, arg.AppName, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TelemetryEvent
+	for rows.Next() {
+		var i TelemetryEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.Kind,
+			&i.Level,
+			&i.Message,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.TraceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSamples = `-- name: ListSamples :many
 SELECT target, res, slot, ts, cpu, cpu_max, cpu_limit, mem, mem_max, mem_limit, net_rx, net_tx, disk_read, disk_write, load, disk_used, disk_total FROM samples WHERE target = ? AND res = ? AND ts >= ? ORDER BY ts
 `

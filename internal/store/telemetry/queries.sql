@@ -94,3 +94,6 @@ DELETE FROM traces WHERE created_at < ?;
 
 -- name: PruneTraceRoutes :exec
 DELETE FROM trace_routes WHERE hour < ?;
+
+-- name: ListProblems :many
+SELECT * FROM telemetry_events WHERE app_name = ? AND kind != 'log' ORDER BY id DESC LIMIT ?;

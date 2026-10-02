@@ -41,7 +41,7 @@ func TestTemplatesRender(t *testing.T) {
 			}},
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
-		"errors":  []teldb.TelemetryEvent{{Kind: "error", Message: "boom", AppName: "web", TraceID: "abc"}},
+		"errors":  map[string]any{"App": "web", "Logs": true, "Events": []teldb.TelemetryEvent{{Kind: "error", Message: "boom", AppName: "web", TraceID: "abc"}}},
 		"usage": usageView{Query: "target=host", Range: "24h", Ranges: usageRanges, Charts: targetCharts(ops.HostTarget, []teldb.Sample{
 			{Ts: 1000, Cpu: 0.5, CpuMax: 1, CpuLimit: 2, Mem: 1 << 30, MemMax: 1 << 30, MemLimit: 4 << 30, Load: 0.3},
 			{Ts: 1060, Cpu: 1.5, CpuMax: 2, CpuLimit: 2, Mem: 2 << 30, MemMax: 3 << 30, MemLimit: 4 << 30, Load: 0.9},

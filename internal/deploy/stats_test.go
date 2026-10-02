@@ -17,3 +17,11 @@ func TestParseDockerStats(t *testing.T) {
 		t.Errorf("got %+v, want %+v", c, want)
 	}
 }
+
+// Health checks carry a Sentry trace marked not sampled.
+func TestUnsampledTrace(t *testing.T) {
+	v := unsampledTrace()
+	if len(v) != 32+1+16+2 || v[32] != '-' || v[49:] != "-0" || v == unsampledTrace() {
+		t.Errorf("sentry-trace %q", v)
+	}
+}

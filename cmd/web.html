@@ -557,7 +557,7 @@
 </div>
 
 <div x-show="tab==='errors'" x-cloak class="space-y-2">
-  <p class="text-xs text-faint">Errors and logs sent by a Sentry SDK using the injected <span class="mono">SENTRY_DSN</span>, and out-of-memory kills of the app and its worker.</p>
+  <p class="text-xs text-faint">Errors and logs sent by a Sentry SDK using the injected <span class="mono">SENTRY_DSN</span>, and crashes, out-of-memory kills and failed health checks of the app and its worker. Logs are shown only on request: they'd bury the rest.</p>
   <div hx-get="/apps/{{.App.Name}}/errors" hx-trigger="load" hx-swap="innerHTML"></div>
 </div>
 
@@ -671,14 +671,18 @@
 
 {{define "errors"}}
 <div class="space-y-2">
-  {{range .}}
+  <div class="flex gap-1">
+    <button type="button" hx-get="/apps/{{.App}}/errors" hx-target="closest div.space-y-2" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if not .Logs}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">Problems</button>
+    <button type="button" hx-get="/apps/{{.App}}/errors?logs=1" hx-target="closest div.space-y-2" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if .Logs}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">With logs</button>
+  </div>
+  {{range .Events}}
   <div class="console">
     <p class="text-zinc-500">{{.CreatedAt}} · <span class="{{if or (eq .Kind "error") (eq .Kind "oom") (eq .Kind "crash") (and (eq .Kind "health") (eq .Level "error"))}}text-red-400{{end}}">{{.Kind}}</span>{{if .Level}} · {{.Level}}{{end}}</p>
     <p class="mt-1">{{.Message}}</p>
     {{if .TraceID}}<a href="/apps/{{.AppName}}/traces/by-trace/{{.TraceID}}" class="inline-block mt-1 text-zinc-500 hover:text-zinc-300 underline">its trace</a>{{end}}
   </div>
   {{else}}
-  <p class="text-sm text-faint">Nothing received yet.</p>
+  <p class="text-sm text-faint">{{if .Logs}}Nothing received yet.{{else}}No problems: no errors, crashes, out-of-memory kills or failed health checks.{{end}}</p>
   {{end}}
 </div>
 {{end}}

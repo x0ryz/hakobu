@@ -524,12 +524,13 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	handle("GET /apps/{a}/errors", func(w http.ResponseWriter, r *http.Request) {
-		events, err := s.Tel.ListTelemetryEvents(r.Context(), teldb.ListTelemetryEventsParams{AppName: r.PathValue("a"), Limit: 50})
+		app, logs := r.PathValue("a"), r.URL.Query().Get("logs") != ""
+		events, err := ops.AppEvents(s, app, logs, 50)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		render(w, "errors", events)
+		render(w, "errors", map[string]any{"App": app, "Logs": logs, "Events": events})
 	})
 
 	handle("GET /apps/{a}/performance", func(w http.ResponseWriter, r *http.Request) {

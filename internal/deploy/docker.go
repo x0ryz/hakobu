@@ -4,6 +4,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -448,12 +449,28 @@ func HTTPCheck(url string, requireOK bool) bool {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     healthTransport,
 	}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "hakobu-health-check")
+	// A trace marked not sampled: Sentry SDKs follow the caller's decision,
+	// so the checks, every 30 s, don't fill the app's traces.
+	req.Header.Set("sentry-trace", unsampledTrace())
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
 	return !requireOK || (resp.StatusCode >= 200 && resp.StatusCode < 300)
+}
+
+// unsampledTrace is a sentry-trace header value, trace-span-sampled, for a
+// new trace that isn't sampled.
+func unsampledTrace() string {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b[:16]) + "-" + hex.EncodeToString(b[16:]) + "-0"
 }
 
 func WaitHealthy(attempts int, interval time.Duration, check func() bool) bool {

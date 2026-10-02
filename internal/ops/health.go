@@ -125,3 +125,13 @@ func forgetHealth(apps []store.App) {
 		}
 	}
 }
+
+// AppEvents lists an app's telemetry, newest first: with logs, or only
+// what went wrong (errors, crashes, out-of-memory kills, health checks),
+// which an app's logs would otherwise bury.
+func AppEvents(s *store.Store, app string, logs bool, limit int64) ([]teldb.TelemetryEvent, error) {
+	if logs {
+		return s.Tel.ListTelemetryEvents(ctx(), teldb.ListTelemetryEventsParams{AppName: app, Limit: limit})
+	}
+	return s.Tel.ListProblems(ctx(), teldb.ListProblemsParams{AppName: app, Limit: limit})
+}
