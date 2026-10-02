@@ -43,9 +43,11 @@ func ensurePostgres() error {
 	return nil
 }
 
-// SuggestDatabaseName prefills the "new database" field so a name doesn't
-// have to be invented: the project name if it's a free valid database name,
-// "main" for the project's first database, "" (type your own) otherwise.
+// SuggestDatabaseName is the name the "new database" field offers, and
+// takes when left empty, so a name doesn't have to be invented: the project
+// name if it's a free valid database name, "main" for the project's first
+// database, "" (type your own) otherwise. It's a placeholder, not a value,
+// so typing doesn't add to it.
 func SuggestDatabaseName(s *store.Store, p store.Project) string {
 	clean := strings.ToLower(p.Name)
 	clean = strings.Map(func(r rune) rune {

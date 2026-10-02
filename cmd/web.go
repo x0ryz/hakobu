@@ -270,7 +270,17 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /projects/{p}/databases", func(r *http.Request) (string, error) {
-		return "", ops.CreateDatabase(s, r.PathValue("p"), strings.TrimSpace(r.FormValue("name")))
+		name := strings.TrimSpace(r.FormValue("name"))
+		if name == "" { // the suggested name, shown as the placeholder
+			p, err := s.GetProject(r.Context(), r.PathValue("p"))
+			if err != nil {
+				return "", err
+			}
+			if name = ops.SuggestDatabaseName(s, p); name == "" {
+				return "", fmt.Errorf("type a name for the database")
+			}
+		}
+		return "", ops.CreateDatabase(s, r.PathValue("p"), name)
 	})
 
 	action("POST /projects/{p}/storages", func(r *http.Request) (string, error) {
