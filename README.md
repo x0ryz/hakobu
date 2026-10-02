@@ -224,7 +224,3 @@ sqlc generate
 - `internal/update/` — signed releases: `hakobu update` and `hakobu rollback`
 - `internal/backup/` — streaming pg_dump/restore, tar of volumes
 - `internal/s3/` — checking which buckets a storage's keys reach
-
-## License
-
-[MIT](LICENSE)
