@@ -72,6 +72,8 @@ func TestTransactionTimesAsNumbers(t *testing.T) {
 func TestRouteName(t *testing.T) {
 	for _, c := range []struct{ name, source, want string }{
 		{"/users/42/profile?email=a@b.c", "url", "/users/{id}/profile"},
+		{"http://172.20.0.3:8000/api/v1/devices/42?x=1", "url", "/api/v1/devices/{id}"},
+		{"GET https://shop.example.com", "url", "GET /"},
 		{"GET /orders/9f8e7d6c-1234-4abc-9def-001122334455", "url", "GET /orders/{id}"},
 		{"/files/a1b2c3d4e5f6", "", "/files/{id}"},
 		{"/blog/hello-world", "url", "/blog/hello-world"},
@@ -81,6 +83,28 @@ func TestRouteName(t *testing.T) {
 	} {
 		if got := RouteName(c.name, c.source); got != c.want {
 			t.Errorf("RouteName(%q, %q) = %q, want %q", c.name, c.source, got, c.want)
+		}
+	}
+}
+
+// What a FastAPI app sends for a request no route matched: its URL with the
+// container's address, status not_found. One route for all of them, and
+// not a failure: the client asked for something that isn't there.
+func TestNotFoundIsOneRouteAndNoFailure(t *testing.T) {
+	payload := `{"type":"transaction","transaction":"http://172.20.0.3:8000/wp-login.php","transaction_info":{"source":"url"},
+		"start_timestamp":1790000000,"timestamp":1790000000.002,
+		"contexts":{"trace":{"trace_id":"abc","status":"not_found"},"response":{"status_code":404}}}`
+	tx, ok := ExtractTransaction(Item{Type: "transaction", Payload: []byte(payload)})
+	if !ok || tx.Name != NoRoute || tx.Failed() {
+		t.Errorf("transaction %+v, failed %v", tx, tx.Failed())
+	}
+	for _, c := range []struct {
+		status string
+		http   int
+		failed bool
+	}{{"unauthenticated", 401, false}, {"internal_error", 500, true}, {"deadline_exceeded", 0, true}, {"cancelled", 0, false}} {
+		if got := (Transaction{Status: c.status, HTTPStatus: c.http}).Failed(); got != c.failed {
+			t.Errorf("%s/%d failed = %v", c.status, c.http, got)
 		}
 	}
 }

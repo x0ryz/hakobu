@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -32,11 +33,15 @@ type Span struct {
 	Status      string
 }
 
-// Failed reports a transaction that ended in an error.
+// Failed reports a transaction that ended in an error: a server error for
+// a request, any status but ok for a task. A 404 or 401 is the client's.
 func (t Transaction) Failed() bool {
-	switch t.Status {
-	case "", "ok", "unknown":
+	if t.HTTPStatus != 0 {
 		return t.HTTPStatus >= 500
+	}
+	switch t.Status {
+	case "", "ok", "unknown", "cancelled":
+		return false
 	}
 	return true
 }
@@ -123,6 +128,11 @@ func ExtractTransaction(item Item) (t Transaction, ok bool) {
 	if t.HTTPStatus == 0 {
 		t.HTTPStatus = trace.Data.HTTPStatus
 	}
+	// Requests no route matched are named after their URL: scanners would
+	// make a route of each.
+	if t.HTTPStatus == 404 && tx.Info.Source == "url" {
+		t.Name = NoRoute
+	}
 	for _, s := range tx.Spans {
 		if s.Start.IsZero() || s.End.Before(s.Start.Time) {
 			continue
@@ -136,6 +146,9 @@ func ExtractTransaction(item Item) (t Transaction, ok bool) {
 	return t, true
 }
 
+// NoRoute is the route of the requests that matched none (404).
+const NoRoute = "(no route: 404)"
+
 // maxRouteName caps a route's name; longer ones are cut.
 const maxRouteName = 200
 
@@ -144,7 +157,7 @@ const maxRouteName = 200
 var idSegment = regexp.MustCompile(`^(\d+|[0-9a-fA-F-]{16,}|[0-9a-fA-F]{8,}|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{15,})$`)
 
 // RouteName turns a transaction's name into its route. Names taken from
-// the URL (source "url", or none) lose the query and get {id} for
+// the URL (source "url", or none) lose the scheme, host and query and get {id} for
 // segments that look like IDs, so requests group by route and the names,
 // stored as they are, don't carry the users' data.
 func RouteName(name, source string) string {
@@ -152,6 +165,14 @@ func RouteName(name, source string) string {
 		method, path, hasMethod := strings.Cut(name, " ")
 		if !hasMethod {
 			method, path = "", name
+		}
+		// A full URL names the host it reached, such as the container's
+		// address: the path is the route.
+		if u, err := url.Parse(path); err == nil && u.Scheme != "" && u.Host != "" {
+			path = u.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
 		}
 		path, _, _ = strings.Cut(path, "?")
 		path, _, _ = strings.Cut(path, "#")
