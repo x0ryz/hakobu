@@ -296,8 +296,8 @@ UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zon
 SELECT * FROM notify WHERE id = 1;
 
 -- name: SaveNotify :exec
-INSERT INTO notify (id, email, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain,
+INSERT INTO notify (id, email, sender_name, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_name = excluded.sender_name, sender_domain = excluded.sender_domain,
 	zone_id = excluded.zone_id, added_address = excluded.added_address, routed_domain = excluded.routed_domain;
 
 -- name: DeleteNotify :exec

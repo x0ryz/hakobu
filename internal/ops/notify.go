@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,8 @@ import (
 // The owner gets an email when something needs them: a deploy after a push
 // failed, a backup failed, an app ran out of memory, the disk is filling
 // up. It goes through Cloudflare Email Service to an address the owner
-// confirmed, which is free, from hakobu@<panel host>. Cloudflare sends
+// confirmed, which is free, from alerts@<panel host> (the name before the @
+// can be changed). Cloudflare sends
 // from any name in a zone with Email Routing enabled; where it isn't,
 // hakobu enables it by turning it on for mail.<panel host>, which leaves
 // the mail of the domain itself alone.
@@ -24,6 +26,13 @@ import (
 // A problem is mailed once, then again only if it's still there hours
 // later; when it's gone, one more email says so. What was mailed is kept
 // in memory, so a restart may repeat an email.
+
+// DefaultSenderName comes before the @ of the sender unless the owner
+// picks another: the panel's host is hakobu.<domain> on most panels, and
+// hakobu@hakobu.… reads twice.
+const DefaultSenderName = "alerts"
+
+var senderName = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$`)
 
 // notifyAgain is how long a problem that's still there stays quiet.
 const notifyAgain = 6 * time.Hour
@@ -40,6 +49,7 @@ var errNotifyOff = errors.New("notifications are off")
 type NotifyInfo struct {
 	On       bool
 	Email    string
+	Name     string // before the @ of From
 	From     string
 	Verified bool   // the owner confirmed the address
 	Err      string // why it couldn't be checked
@@ -56,7 +66,7 @@ func Notifications(s *store.Store) NotifyInfo {
 	if err != nil {
 		return NotifyInfo{}
 	}
-	info := NotifyInfo{On: true, Email: n.Email, From: "hakobu@" + n.SenderDomain}
+	info := NotifyInfo{On: true, Email: n.Email, Name: n.SenderName, From: n.SenderName + "@" + n.SenderDomain}
 	if _, ok := confirmed.Load(n.Email); ok {
 		info.Verified = true
 		return info
@@ -175,10 +185,17 @@ func apexChoice(c cloudflare.Client, z cloudflare.Zone, r cloudflare.Routing) (N
 // from if given (one of the account's), and asks Cloudflare to have the
 // address confirmed. What hakobu set up for an earlier address or domain
 // and no longer needs is removed.
-func SetupNotifications(s *store.Store, email, from string) error {
+func SetupNotifications(s *store.Store, email, name, from string) error {
 	addr, err := mail.ParseAddress(strings.TrimSpace(email))
 	if err != nil || addr.Name != "" {
 		return fmt.Errorf("%q isn't an email address", email)
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		name = DefaultSenderName
+	}
+	if !senderName.MatchString(name) {
+		return fmt.Errorf("%q can't come before the @: use letters, digits, dots, dashes and underscores", name)
 	}
 	c, cf, err := cfClient(s)
 	if err != nil {
@@ -199,7 +216,7 @@ func SetupNotifications(s *store.Store, email, from string) error {
 	if err != nil {
 		return tokenHint(err)
 	}
-	n := store.SaveNotifyParams{Email: addr.Address, SenderDomain: sender, ZoneID: zone.ID, RoutedDomain: routed}
+	n := store.SaveNotifyParams{Email: addr.Address, SenderName: name, SenderDomain: sender, ZoneID: zone.ID, RoutedDomain: routed}
 	prev, prevErr := s.GetNotify(ctx())
 	hadPrev := prevErr == nil
 	if hadPrev { // what hakobu set up before and still uses stays its to undo
@@ -382,7 +399,7 @@ func mailOwner(s *store.Store, subject, text string) error {
 	}
 	host := config.PublicHost()
 	err = c.SendEmail(cf.AccountID, cloudflare.Email{
-		FromAddress: "hakobu@" + n.SenderDomain,
+		FromAddress: n.SenderName + "@" + n.SenderDomain,
 		FromName:    "Hakobu",
 		To:          n.Email,
 		Subject:     subject,

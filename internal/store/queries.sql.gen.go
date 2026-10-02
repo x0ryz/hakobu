@@ -629,7 +629,7 @@ func (q *Queries) GetGitHubApp(ctx context.Context) (GitHubApp, error) {
 
 const getNotify = `-- name: GetNotify :one
 
-SELECT id, email, sender_domain, zone_id, added_address, routed_domain FROM notify WHERE id = 1
+SELECT id, email, sender_domain, zone_id, added_address, routed_domain, sender_name FROM notify WHERE id = 1
 `
 
 // Notifications
@@ -643,6 +643,7 @@ func (q *Queries) GetNotify(ctx context.Context) (Notify, error) {
 		&i.ZoneID,
 		&i.AddedAddress,
 		&i.RoutedDomain,
+		&i.SenderName,
 	)
 	return i, err
 }
@@ -1471,13 +1472,14 @@ func (q *Queries) SaveGitHubApp(ctx context.Context, arg SaveGitHubAppParams) er
 }
 
 const saveNotify = `-- name: SaveNotify :exec
-INSERT INTO notify (id, email, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain,
+INSERT INTO notify (id, email, sender_name, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_name = excluded.sender_name, sender_domain = excluded.sender_domain,
 	zone_id = excluded.zone_id, added_address = excluded.added_address, routed_domain = excluded.routed_domain
 `
 
 type SaveNotifyParams struct {
 	Email        string
+	SenderName   string
 	SenderDomain string
 	ZoneID       string
 	AddedAddress int64
@@ -1487,6 +1489,7 @@ type SaveNotifyParams struct {
 func (q *Queries) SaveNotify(ctx context.Context, arg SaveNotifyParams) error {
 	_, err := q.db.ExecContext(ctx, saveNotify,
 		arg.Email,
+		arg.SenderName,
 		arg.SenderDomain,
 		arg.ZoneID,
 		arg.AddedAddress,

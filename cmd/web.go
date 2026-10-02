@@ -577,12 +577,16 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		if email == "" {
 			email = r.FormValue("other")
 		}
-		return "", ops.SetupNotifications(s, email, r.FormValue("from"))
+		return "", ops.SetupNotifications(s, email, r.FormValue("name"), r.FormValue("from"))
 	})
 	handle("GET /settings/notify/form", func(w http.ResponseWriter, r *http.Request) {
 		to, from, why, err := ops.NotifyChoices(s)
 		n := ops.Notifications(s)
-		data := map[string]any{"To": to, "From": from, "Why": why, "PublicHost": config.PublicHost(), "Notify": n}
+		name := n.Name
+		if name == "" {
+			name = ops.DefaultSenderName
+		}
+		data := map[string]any{"To": to, "From": from, "Why": why, "PublicHost": config.PublicHost(), "Notify": n, "Name": name}
 		if n.On && !slices.ContainsFunc(to, func(c ops.NotifyChoice) bool { return c.Selected }) {
 			data["OtherValue"] = n.Email // not confirmed yet: it's no choice of its own
 		}

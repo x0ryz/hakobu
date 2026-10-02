@@ -196,19 +196,19 @@ func TestSetupNotifications(t *testing.T) {
 		len(why) != 1 || !strings.Contains(why[0], "mx1.other.example") {
 		t.Fatalf("choices: to %+v, from %+v, why %v, %v", to, from, why, err)
 	}
-	if err := SetupNotifications(s, "not an address", ""); err == nil {
+	if err := SetupNotifications(s, "not an address", "", ""); err == nil {
 		t.Error("took a malformed address")
 	}
-	if err := SetupNotifications(s, "me@example.org", "example.com"); err == nil {
+	if err := SetupNotifications(s, "me@example.org", "", "example.com"); err == nil {
 		t.Error("turned Email Routing on for an apex that gets mail")
 	}
 
 	// It's turned on through mail.<panel host>, and the apex keeps no SPF
 	// record it didn't have; emails come from the panel's host.
-	if err := SetupNotifications(s, "me@example.org", ""); err != nil {
+	if err := SetupNotifications(s, "me@example.org", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if info := Notifications(s); info.From != "hakobu@panel.example.com" || info.Email != "me@example.org" || info.Verified {
+	if info := Notifications(s); info.From != "alerts@panel.example.com" || info.Email != "me@example.org" || info.Verified {
 		t.Errorf("before confirming: %+v", info)
 	}
 	if !f.routed["mail.panel.example.com"] || len(f.spf("example.com")) != 0 {
@@ -222,10 +222,18 @@ func TestSetupNotifications(t *testing.T) {
 		t.Errorf("the panel's host isn't the current one: %+v", from)
 	}
 
-	// Another address: the one hakobu added goes; the subdomain keeping the
-	// zone's Email Routing on stays.
-	if err := SetupNotifications(s, "old@example.org", ""); err != nil {
+	// Another address and name: the address hakobu added goes; the
+	// subdomain keeping the zone's Email Routing on stays.
+	if err := SetupNotifications(s, "old@example.org", "Ops", ""); err != nil {
 		t.Fatal(err)
+	}
+	if info := Notifications(s); info.From != "ops@panel.example.com" {
+		t.Errorf("with a name of its own: %+v", info)
+	}
+	for _, bad := range []string{"a b", "-x", "x@y", "ünï"} {
+		if err := SetupNotifications(s, "old@example.org", bad, ""); err == nil {
+			t.Errorf("took %q before the @", bad)
+		}
 	}
 	if _, ok := f.addresses["me@example.org"]; ok || !f.routed["mail.panel.example.com"] {
 		t.Errorf("after changing the address: addresses %v, routed %v", f.addresses, f.routed)
@@ -246,10 +254,10 @@ func TestSetupNotifications(t *testing.T) {
 	}
 
 	// The zone's Email Routing on already: nothing to set up.
-	if err := SetupNotifications(s, "old@example.org", ""); err != nil {
+	if err := SetupNotifications(s, "old@example.org", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if info := Notifications(s); info.From != "hakobu@panel.example.com" || len(f.routed) != 0 {
+	if info := Notifications(s); info.From != "alerts@panel.example.com" || len(f.routed) != 0 {
 		t.Errorf("zone on already: %+v, routed %v", info, f.routed)
 	}
 
@@ -260,16 +268,16 @@ func TestSetupNotifications(t *testing.T) {
 	if _, from, why, _ := NotifyChoices(s); len(from) != 2 || from[1].Value != "example.com" || len(why) != 0 {
 		t.Errorf("choices without MX: from %+v, why %v", from, why)
 	}
-	if err := SetupNotifications(s, "old@example.org", "example.com"); err != nil {
+	if err := SetupNotifications(s, "old@example.org", "", "example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if info := Notifications(s); info.From != "hakobu@example.com" || !f.apexReady || len(f.spf("example.com")) != 1 {
+	if info := Notifications(s); info.From != "alerts@example.com" || !f.apexReady || len(f.spf("example.com")) != 1 {
 		t.Errorf("apex sender: %+v, ready %v, SPF %v", info, f.apexReady, f.spf("example.com"))
 	}
 	if err := TurnOffNotifications(s); err != nil || !f.apexReady {
 		t.Errorf("turning off took the apex's Email Routing: %v, ready %v", err, f.apexReady)
 	}
-	if err := SetupNotifications(s, "old@example.org", "other.dev"); err == nil {
+	if err := SetupNotifications(s, "old@example.org", "", "other.dev"); err == nil {
 		t.Error("sent from a domain outside the account")
 	}
 }
@@ -280,7 +288,7 @@ func TestProblemsAreMailedOnce(t *testing.T) {
 	boom := errors.New("boom")
 
 	NoteBackup(s, "shop", boom) // notifications are off: nothing
-	if err := SetupNotifications(s, "me@example.org", ""); err != nil {
+	if err := SetupNotifications(s, "me@example.org", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	f.addresses["me@example.org"] = true

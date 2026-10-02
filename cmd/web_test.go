@@ -62,7 +62,7 @@ func TestTemplatesRender(t *testing.T) {
 		t.Errorf("new-app without apps domain: %v", err)
 	}
 	for _, data := range []map[string]any{
-		{"PublicHost": "p", "Notify": ops.NotifyInfo{On: true}, "To": []ops.NotifyChoice{{Value: "a@b.c", Note: "n", Selected: true}},
+		{"PublicHost": "p", "Name": "alerts", "Notify": ops.NotifyInfo{On: true}, "To": []ops.NotifyChoice{{Value: "a@b.c", Note: "n", Selected: true}},
 			"From": []ops.NotifyChoice{{Value: "mail.p", Note: "n"}}},
 		{"PublicHost": "p", "Error": "boom", "OtherValue": "x@y.z", "Why": []string{"example.com: its mail goes to mx.example"}},
 	} {

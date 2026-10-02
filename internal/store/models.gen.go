@@ -118,6 +118,7 @@ type Notify struct {
 	ZoneID       string
 	AddedAddress int64
 	RoutedDomain string
+	SenderName   string
 }
 
 type Owner struct {

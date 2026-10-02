@@ -610,9 +610,12 @@
       </div>
       <div>
         <label class="label">Send from</label>
-        <select name="from" class="input w-full">
-          {{range .From}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>hakobu@{{.Value}} · {{.Note}}</option>{{end}}
-        </select>
+        <div class="flex gap-1.5 items-center">
+          <input name="name" value="{{.Name}}" required class="input w-36 mono">
+          <select name="from" class="input flex-1 min-w-0">
+            {{range .From}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>@{{.Value}} · {{.Note}}</option>{{end}}
+          </select>
+        </div>
       </div>
     </div>
     <div x-show="other" {{if not (or .OtherValue (not .To))}}x-cloak{{end}}>
