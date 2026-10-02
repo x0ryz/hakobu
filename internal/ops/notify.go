@@ -258,6 +258,11 @@ func senderDomain(c cloudflare.Client, zones []cloudflare.Zone, from string) (se
 	if err := enableRouting(c, zone, from); err != nil {
 		return "", zone, "", err
 	}
+	if from == zone.Name {
+		// Left on when emails are turned off: it can only be turned off
+		// for the whole zone, which would take any routing the owner adds.
+		return from, zone, "", nil
+	}
 	return from, zone, from, nil
 }
 
@@ -267,7 +272,7 @@ func senderDomain(c cloudflare.Client, zones []cloudflare.Zone, from string) (se
 // that's put back as it was.
 func enableRouting(c cloudflare.Client, zone cloudflare.Zone, name string) error {
 	if name == zone.Name { // the apex sends: its SPF must allow Cloudflare
-		return c.EnableEmailRouting(zone.ID, name)
+		return c.EnableEmailRouting(zone.ID, "")
 	}
 	before, err := c.SPFRecords(zone.ID, zone.Name)
 	if err != nil {

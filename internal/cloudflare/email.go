@@ -44,19 +44,26 @@ func (c Client) EmailRouting(zoneID string) (Routing, error) {
 	return out, nil
 }
 
-// EnableEmailRouting turns Email Routing on for name, the zone's apex or
-// one of its subdomains: Cloudflare adds its MX, SPF and DKIM records
-// there. Turning it on again is no error.
+// EnableEmailRouting turns Email Routing on for name, a subdomain, or with
+// name "" for the zone's apex (the API takes no name for it): Cloudflare
+// adds its MX, SPF and DKIM records there. Turning it on again is no
+// error.
 func (c Client) EnableEmailRouting(zoneID, name string) error {
-	err := c.call("POST", "/zones/"+zoneID+"/email/routing/dns", map[string]string{"name": name}, nil)
+	var body any
+	if name != "" {
+		body = map[string]string{"name": name}
+	}
+	err := c.call("POST", "/zones/"+zoneID+"/email/routing/dns", body, nil)
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "already") {
 		return nil
 	}
 	return err
 }
 
-// DisableEmailRouting turns Email Routing off for name and removes its
-// records; never for a whole zone by accident, name is required.
+// DisableEmailRouting turns Email Routing off for name, a subdomain, and
+// removes its records. There's no turning it off for the apex alone, only
+// for the whole zone with its subdomains, so hakobu never does: name is
+// required.
 func (c Client) DisableEmailRouting(zoneID, name string) error {
 	if name == "" {
 		return errors.New("disabling Email Routing needs the domain")

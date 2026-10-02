@@ -56,9 +56,12 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 			}
 			ok(map[string]any{"enabled": f.apexReady || len(f.routed) > 0, "status": status, "subdomains": subs})
 		case route == "POST /zones/z1/email/routing/dns":
-			if body["name"] == "example.com" {
+			switch body["name"] {
+			case "example.com":
+				t.Error("named the apex, which the API refuses")
+			case "":
 				f.apexReady, f.mx = true, []string{"route1.mx.cloudflare.net"}
-			} else {
+			default:
 				f.routed[body["name"]] = true
 				f.addTXT(body["name"], cloudflare.CloudflareSPF)
 			}
@@ -67,8 +70,8 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 			}
 			ok(map[string]any{})
 		case route == "DELETE /zones/z1/email/routing/dns":
-			if body["name"] == "example.com" {
-				f.apexReady, f.mx = false, nil
+			if body["name"] == "" || body["name"] == "example.com" {
+				t.Error("turned Email Routing off for the whole zone")
 			}
 			delete(f.routed, body["name"])
 			ok(map[string]any{})
@@ -239,7 +242,8 @@ func TestSetupNotifications(t *testing.T) {
 	}
 
 	// The domain gets no mail now: its apex is offered, and sending from it
-	// turns Email Routing on there, Cloudflare's SPF included; off undoes it.
+	// turns Email Routing on there, Cloudflare's SPF included; turning the
+	// emails off leaves that on.
 	f.mx = nil
 	if _, from, why, _ := NotifyChoices(s); len(from) != 2 || from[1].Value != "example.com" || len(why) != 0 {
 		t.Errorf("choices without MX: from %+v, why %v", from, why)
@@ -253,7 +257,7 @@ func TestSetupNotifications(t *testing.T) {
 	if err := TurnOffNotifications(s); err != nil {
 		t.Fatal(err)
 	}
-	if f.apexReady || len(f.spf("example.com")) != 0 {
+	if !f.apexReady || len(f.spf("example.com")) != 1 {
 		t.Errorf("after turning off: ready %v, SPF %v", f.apexReady, f.spf("example.com"))
 	}
 
