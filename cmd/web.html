@@ -621,7 +621,7 @@
     <button class="btn-pri">{{if .Notify.On}}Change{{else}}Turn on{{end}}</button>
   </form>
   {{if .Why}}<ul class="text-xs text-faint space-y-1">{{range .Why}}<li>Not offered: {{.}}.</li>{{end}}</ul>{{end}}
-  <p class="text-xs text-faint">Sent through Cloudflare Email Service, free for an address confirmed in your Cloudflare account; a new one gets a link to confirm. hakobu turns Email Routing on where needed: for <span class="mono">mail.{{.PublicHost}}</span>, or for a domain that gets no mail, never for one whose mail goes elsewhere. Turn off removes what hakobu set up, except Email Routing on a domain itself: that can only be turned off with all its subdomains, in Cloudflare.</p>
+  <p class="text-xs text-faint">Sent through Cloudflare Email Service, free for an address confirmed in your Cloudflare account; a new one gets a link to confirm. Cloudflare sends from any address of a domain with Email Routing on; where it's off, hakobu turns it on through <span class="mono">mail.{{.PublicHost}}</span>, which leaves the domain's own mail alone, and for a domain itself only if it gets no mail. Turn off removes what hakobu set up, except Email Routing for a domain itself: that can only be turned off with all its subdomains, in Cloudflare.</p>
 </div>
 {{end}}
 

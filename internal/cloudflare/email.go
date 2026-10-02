@@ -9,14 +9,18 @@ import (
 
 // Email to the owner goes through Cloudflare Email Service. Sending to a
 // verified destination address (one whose owner clicked the link in
-// Cloudflare's confirmation email) is free on every plan, but the sender
-// must be on a domain with Email Routing on.
+// Cloudflare's confirmation email) is free on every plan, from any name in
+// a zone with Email Routing enabled (tried: a name with no records, a
+// CNAME, an unconfigured apex).
 
 // Routing is a zone's Email Routing.
 type Routing struct {
+	// Enabled for the zone, which is what sending from any name in it
+	// takes: turning it on for a subdomain enables the zone too, without
+	// touching the apex's mail.
+	Enabled bool
 	// ApexReady: on and working for the zone's apex, whose MX records
-	// point at Cloudflare. Turning it on for a subdomain marks the zone
-	// enabled too, so that alone means nothing.
+	// point at Cloudflare.
 	ApexReady  bool
 	Subdomains []string // where it's on and working
 }
@@ -35,7 +39,7 @@ func (c Client) EmailRouting(zoneID string) (Routing, error) {
 	if err := c.call("GET", "/zones/"+zoneID+"/email/routing", nil, &r); err != nil {
 		return Routing{}, err
 	}
-	out := Routing{ApexReady: r.Enabled && r.Status == "ready"}
+	out := Routing{Enabled: r.Enabled, ApexReady: r.Enabled && r.Status == "ready"}
 	for _, s := range r.Subdomains {
 		if s.Enabled && s.Status == "ready" {
 			out.Subdomains = append(out.Subdomains, s.Name)

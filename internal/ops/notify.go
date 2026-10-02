@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +16,10 @@ import (
 // The owner gets an email when something needs them: a deploy after a push
 // failed, a backup failed, an app ran out of memory, the disk is filling
 // up. It goes through Cloudflare Email Service to an address the owner
-// confirmed, which is free, from hakobu@ a domain with Email Routing on:
-// the zone's apex if it already has it, otherwise mail.<panel host>, so
-// the mail of the owner's own domain is never touched.
+// confirmed, which is free, from hakobu@<panel host>. Cloudflare sends
+// from any name in a zone with Email Routing enabled; where it isn't,
+// hakobu enables it by turning it on for mail.<panel host>, which leaves
+// the mail of the domain itself alone.
 //
 // A problem is mailed once, then again only if it's still there hours
 // later; when it's gone, one more email says so. What was mailed is kept
@@ -117,12 +117,19 @@ func NotifyChoices(s *store.Store) (to, from []NotifyChoice, why []string, err e
 		return nil, nil, nil, err
 	}
 	host := config.PublicHost()
-	mailHost := "mail." + host
 	if zone, ok := cloudflare.ZoneFor(zones, host); ok {
-		from = append(from, NotifyChoice{Value: mailHost, Note: "hakobu sets it up when you turn emails on; your domain's mail isn't touched"})
+		r, err := c.EmailRouting(zone.ID)
+		if err != nil {
+			return nil, nil, nil, tokenHint(err)
+		}
+		note := "Email Routing is on for " + zone.Name
+		if !r.Enabled {
+			note = "hakobu turns Email Routing on for " + zone.Name + " through mail." + host + "; the domain's own mail isn't touched"
+		}
+		from = append(from, NotifyChoice{Value: host, Note: note})
 		zones = append([]cloudflare.Zone{zone}, zones...) // the panel's first
 	}
-	seen := map[string]bool{}
+	seen := map[string]bool{host: true}
 	for _, z := range zones {
 		if seen[z.Name] {
 			continue
@@ -139,14 +146,6 @@ func NotifyChoices(s *store.Store) (to, from []NotifyChoice, why []string, err e
 			from = append(from, apex)
 		default:
 			why = append(why, apex.Note)
-		}
-		for _, n := range r.Subdomains {
-			if n == mailHost {
-				from[0].Note = "Email Routing is on"
-			} else if !seen[n] {
-				seen[n] = true
-				from = append(from, NotifyChoice{Value: n, Note: "Email Routing is on"})
-			}
 		}
 	}
 	for i := range from {
@@ -205,8 +204,8 @@ func SetupNotifications(s *store.Store, email, from string) error {
 	hadPrev := prevErr == nil
 	if hadPrev { // what hakobu set up before and still uses stays its to undo
 		added = added || (prev.AddedAddress == 1 && strings.EqualFold(prev.Email, addr.Address))
-		if prev.RoutedDomain == sender {
-			n.RoutedDomain, n.ZoneID = sender, prev.ZoneID
+		if prev.RoutedDomain != "" && prev.ZoneID == zone.ID && n.RoutedDomain == "" {
+			n.RoutedDomain = prev.RoutedDomain // it keeps the zone's Email Routing on
 		}
 	}
 	if added {
@@ -216,54 +215,51 @@ func SetupNotifications(s *store.Store, email, from string) error {
 		return err
 	}
 	if hadPrev {
-		return undoNotify(c, cf.AccountID, prev, addr.Address, sender)
+		return undoNotify(c, cf.AccountID, prev, addr.Address, n.RoutedDomain)
 	}
 	return nil
 }
 
-// senderDomain picks the domain to send from, turning Email Routing on for
-// it if needed, and returns it with its zone and, if hakobu turned it on,
-// the domain again. It turns it on for a zone's apex only if the domain
-// has no MX records: otherwise that would take over its mail.
+// senderDomain picks the domain to send from, the panel's host if from is
+// "", and makes sure its zone has Email Routing on. It returns the domain
+// with its zone and the subdomain hakobu turned Email Routing on for, if
+// it did. It turns it on for a zone's apex only if the domain has no MX
+// records: otherwise that would take over its mail.
 func senderDomain(c cloudflare.Client, zones []cloudflare.Zone, from string) (sender string, zone cloudflare.Zone, routed string, err error) {
-	host := from
-	if host == "" {
-		host = config.PublicHost()
+	sender = from
+	if sender == "" {
+		sender = config.PublicHost()
 	}
-	zone, ok := cloudflare.ZoneFor(zones, host)
+	zone, ok := cloudflare.ZoneFor(zones, sender)
 	if !ok {
-		return "", zone, "", fmt.Errorf("%s is not in a domain of your Cloudflare account", host)
+		return "", zone, "", fmt.Errorf("%s is not in a domain of your Cloudflare account", sender)
 	}
 	r, err := c.EmailRouting(zone.ID)
 	if err != nil {
 		return "", zone, "", err
 	}
 	switch {
-	case from == "" && r.ApexReady, from == zone.Name && r.ApexReady:
-		return zone.Name, zone, "", nil
-	case from == zone.Name:
-		apex, err := apexChoice(c, zone, r)
-		if err != nil {
-			return "", zone, "", err
-		}
-		if apex.Value == "" {
-			return "", zone, "", fmt.Errorf("can't send from %s; send from a subdomain", apex.Note)
-		}
-	case from == "":
-		from = "mail." + host
-	}
-	if slices.Contains(r.Subdomains, from) {
-		return from, zone, "", nil
-	}
-	if err := enableRouting(c, zone, from); err != nil {
-		return "", zone, "", err
-	}
-	if from == zone.Name {
+	case sender == zone.Name && r.ApexReady:
+		return sender, zone, "", nil
+	case sender == zone.Name:
 		// Left on when emails are turned off: it can only be turned off
 		// for the whole zone, which would take any routing the owner adds.
-		return from, zone, "", nil
+		apex, err := apexChoice(c, zone, r)
+		if err == nil && apex.Value == "" {
+			err = fmt.Errorf("can't send from %s; send from a subdomain", apex.Note)
+		}
+		if err == nil {
+			err = enableRouting(c, zone, zone.Name)
+		}
+		return sender, zone, "", err
+	case r.Enabled:
+		return sender, zone, "", nil
 	}
-	return from, zone, from, nil
+	routed = "mail." + sender
+	if err := enableRouting(c, zone, routed); err != nil {
+		return "", zone, "", err
+	}
+	return sender, zone, routed, nil
 }
 
 // enableRouting turns Email Routing on for name. For a subdomain,
