@@ -45,7 +45,10 @@ curl -fsSL https://hakobu.dev/install.sh | sudo bash
    token and paste it into the terminal (it isn't echoed). Or set `CLOUDFLARE_API_TOKEN`
    before running the installer. Under **Zone Resources** you can pick just the domains
    hakobu should use instead of all of them: whoever takes over the server gets the
-   token, and with it the DNS of every domain it covers.
+   token, and with it the DNS of every domain it covers. **Client IP Address Filtering**
+   makes a copy of the token that leaks elsewhere useless: list both of the server's
+   addresses, the IPv6 one as its `/64`, since the server reaches Cloudflare over IPv6
+   when it has it.
 2. Pick one of your domains from the list and the panel's subdomain (default `hakobu`).
    Hakobu creates the tunnel and a DNS record for the panel.
 3. Open the printed link, `https://hakobu.example.com/setup?token=…`, click

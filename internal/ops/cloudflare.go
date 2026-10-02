@@ -133,7 +133,7 @@ func cfClient(s *store.Store) (cloudflare.Client, store.Cloudflare, error) {
 	if err != nil {
 		return cloudflare.Client{}, cf, fmt.Errorf("Cloudflare is not connected")
 	}
-	return cloudflare.Client{Token: string(cf.ApiToken)}, cf, nil
+	return cloudflare.Client{Token: string(cf.ApiToken), AccountID: cf.AccountID}, cf, nil
 }
 
 func Zones(s *store.Store) ([]cloudflare.Zone, error) {

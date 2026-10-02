@@ -348,17 +348,13 @@ func undoNotify(c cloudflare.Client, accountID string, n store.Notify, keepEmail
 	return nil
 }
 
-// tokenHint explains a refusal by Cloudflare that's down to a token made
-// before hakobu sent email.
+// tokenHint names the permissions email needs when Cloudflare refused a
+// valid token: one made before hakobu sent email lacks them.
 func tokenHint(err error) error {
-	if err == nil {
-		return nil
+	if err == nil || !strings.Contains(err.Error(), cloudflare.TokenLacksPermission) {
+		return err
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "authentication") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "permission") {
-		return fmt.Errorf("%w; the Cloudflare token needs Zone Settings Edit, Email Routing Addresses Edit and Email Sending Edit: give hakobu a new one with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`", err)
-	}
-	return err
+	return fmt.Errorf("%w; email needs Zone Settings Edit, Email Routing Addresses Edit and Email Sending Edit: give hakobu a new token with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`", err)
 }
 
 // TurnOffNotifications stops the emails and removes from Cloudflare what

@@ -51,7 +51,7 @@ func (c Client) PutObject(accountID, bucket, key string, body io.Reader, size in
 	if err != nil {
 		return err
 	}
-	return decode("PUT", path, resp, nil)
+	return c.decode("PUT", path, resp, nil)
 }
 
 // GetObject returns the object's body; the caller closes it.
@@ -62,7 +62,7 @@ func (c Client) GetObject(accountID, bucket, key string) (io.ReadCloser, error) 
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, decode("GET", path, resp, nil)
+		return nil, c.decode("GET", path, resp, nil)
 	}
 	return resp.Body, nil
 }
@@ -95,7 +95,7 @@ func (c Client) ListObjects(accountID, bucket, prefix string) ([]string, error) 
 				IsTruncated bool   `json:"is_truncated"`
 			} `json:"result_info"`
 		}
-		raw, err := readEnvelope("GET", path, resp)
+		raw, err := c.readEnvelope("GET", path, resp)
 		if err != nil {
 			return nil, err
 		}

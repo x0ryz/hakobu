@@ -73,6 +73,7 @@ func (c Client) CheckToken() ([]Zone, error) {
 	if len(zones) == 0 {
 		return nil, fmt.Errorf("the token sees no domains: give it Zone Read and DNS Edit for the domains hakobu should use")
 	}
+	c.AccountID = zones[0].Account.ID // for diagnosing a refusal
 	if err := c.call("GET", "/accounts/"+zones[0].Account.ID+"/cfd_tunnel?per_page=1", nil, nil); err != nil {
 		return nil, fmt.Errorf("the token can't manage tunnels: give it Cloudflare Tunnel Edit (%w)", err)
 	}
@@ -80,7 +81,12 @@ func (c Client) CheckToken() ([]Zone, error) {
 }
 
 // Client calls the Cloudflare API with an API token.
-type Client struct{ Token string }
+type Client struct {
+	Token string
+	// AccountID, if known, lets a refused request say why: an account's
+	// token is checked against its account.
+	AccountID string
+}
 
 func (c Client) call(method, path string, in, out any) error {
 	var body io.Reader
@@ -95,7 +101,7 @@ func (c Client) call(method, path string, in, out any) error {
 	if err != nil {
 		return err
 	}
-	return decode(method, path, resp, out)
+	return c.decode(method, path, resp, out)
 }
 
 // do sends a request; size is the body's length, -1 to let net/http work
@@ -114,8 +120,8 @@ func (c Client) do(method, path, contentType string, body io.Reader, size int64)
 }
 
 // decode reads the API's JSON envelope and unmarshals its result into out.
-func decode(method, path string, resp *http.Response, out any) error {
-	raw, err := readEnvelope(method, path, resp)
+func (c Client) decode(method, path string, resp *http.Response, out any) error {
+	raw, err := c.readEnvelope(method, path, resp)
 	if err != nil {
 		return err
 	}
@@ -133,24 +139,96 @@ func decode(method, path string, resp *http.Response, out any) error {
 
 // readEnvelope reads a response and checks the API's success flag; it
 // returns the whole envelope, for callers that need more than its result.
-func readEnvelope(method, path string, resp *http.Response) ([]byte, error) {
+// A refused token, the API says, comes with "Authentication error" whether
+// it lacks a permission, was deleted or is used from an address it doesn't
+// allow; readEnvelope then asks the token itself (diagnose) and says which.
+func (c Client) readEnvelope(method, path string, resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	var env struct {
-		Success bool                       `json:"success"`
-		Errors  []struct{ Message string } `json:"errors"`
+		Success bool `json:"success"`
+		Errors  []struct {
+			Code    int
+			Message string
+		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("cloudflare %s %s (%d): %s", method, path, resp.StatusCode, raw)
 	}
 	if !env.Success {
 		var msgs []string
+		refused := false
 		for _, e := range env.Errors {
 			msgs = append(msgs, e.Message)
+			refused = refused || refusedCodes[e.Code] || strings.Contains(e.Message, "Authentication error") || strings.Contains(e.Message, "Invalid API Token")
 		}
-		return nil, fmt.Errorf("cloudflare %s %s: %s", method, path, strings.Join(msgs, "; "))
+		err := fmt.Errorf("cloudflare %s %s: %s", method, path, strings.Join(msgs, "; "))
+		if refused {
+			if why := c.diagnose(); why != "" {
+				err = fmt.Errorf("%w (%s)", err, why)
+			}
+		}
+		return nil, err
 	}
 	return raw, nil
+}
+
+// refusedCodes are the API's errors for a token it won't take (1000, an
+// invalid token, is told by its message: other APIs use the code too).
+var refusedCodes = map[int]bool{6003: true, 6111: true, 9106: true, 9109: true, 10000: true}
+
+// Diagnoses of a refused token.
+const (
+	TokenLacksPermission = "the token is valid, so it lacks a permission this needs"
+	tokenGone            = "the token doesn't exist any more, deleted or rolled: give hakobu a new one with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`"
+	tokenFromElsewhere   = "Cloudflare refuses the token from this server's address: add both the server's IPv4 and IPv6 addresses (the IPv6 one as its /64) to the token's Client IP Address Filtering"
+)
+
+// diagnose asks Cloudflare about the token itself: an account's token at
+// its account, a user's at the user. "" if it can't tell.
+func (c Client) diagnose() string {
+	paths := []string{"/user/tokens/verify"}
+	if c.AccountID != "" {
+		paths = append([]string{"/accounts/" + c.AccountID + "/tokens/verify"}, paths...)
+	}
+	gone := false
+	for _, path := range paths {
+		resp, err := c.do("GET", path, "application/json", nil, -1)
+		if err != nil {
+			return ""
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var env struct {
+			Success bool `json:"success"`
+			Errors  []struct {
+				Code    int
+				Message string
+			} `json:"errors"`
+			Result struct {
+				Status string `json:"status"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(raw, &env) != nil {
+			return ""
+		}
+		if env.Success {
+			if env.Result.Status != "active" {
+				return "the token is " + env.Result.Status + ": give hakobu a new one with `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`"
+			}
+			return TokenLacksPermission
+		}
+		for _, e := range env.Errors {
+			if strings.Contains(strings.ToLower(e.Message), "location") {
+				return tokenFromElsewhere + " (" + e.Message + ")"
+			}
+			gone = gone || e.Code == 1000 || strings.Contains(e.Message, "Invalid API Token")
+		}
+	}
+	if gone {
+		return tokenGone
+	}
+	return ""
 }
 
 type Zone struct {

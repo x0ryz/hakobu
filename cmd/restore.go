@@ -63,7 +63,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 			return errNoSecret
 		}
 	}
-	at, err := ops.RestorePanel(cloudflare.Client{Token: token}, kf, config.DatabaseFile, config.MasterKeyFile, restoreAt)
+	at, err := ops.RestorePanel(cloudflare.Client{Token: token, AccountID: kf.AccountID}, kf, config.DatabaseFile, config.MasterKeyFile, restoreAt)
 	if err != nil {
 		return err
 	}
