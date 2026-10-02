@@ -146,9 +146,13 @@ func ensureSetupToken(s *store.Store) (string, error) {
 
 // runProxyPoller keeps every app's proxy listening (after an agent restart
 // this re-attaches them to their containers) and retries tunnel route
-// updates that failed.
+// updates that failed, waiting longer after each failure: one that won't
+// pass, a deleted token say, would otherwise call Cloudflare every few
+// seconds until it rate-limits the account.
 func runProxyPoller(s *store.Store) {
 	lastErr := ""
+	var wait time.Duration
+	var nextSync time.Time
 	for {
 		if apps, err := s.ListApps(context.Background()); err == nil {
 			for _, a := range apps {
@@ -157,13 +161,27 @@ func runProxyPoller(s *store.Store) {
 				}
 			}
 		}
-		err := ops.SyncTunnel(s)
-		if err != nil && err.Error() != lastErr {
-			fmt.Println("tunnel routes not updated (retrying):", err)
+		if time.Now().After(nextSync) {
+			err := ops.SyncTunnel(s)
+			wait = syncBackoff(wait, err)
+			nextSync = time.Now().Add(wait)
+			if err != nil && err.Error() != lastErr {
+				fmt.Printf("tunnel routes not updated (retrying in %s): %v\n", wait, err)
+			}
+			lastErr = fmt.Sprint(err)
 		}
-		lastErr = fmt.Sprint(err)
 		time.Sleep(config.ProxyPollEvery)
 	}
+}
+
+// syncBackoff is how long to wait before the next tunnel sync: no time
+// after one that worked, twice as long as the last wait after a failure,
+// from a minute up to an hour.
+func syncBackoff(last time.Duration, err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	return min(max(2*last, time.Minute), time.Hour)
 }
 
 // runBackupScheduler checks hourly for databases and the panel due a

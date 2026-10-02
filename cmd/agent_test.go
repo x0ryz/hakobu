@@ -55,3 +55,19 @@ func TestWebhookRefusesReplays(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncBackoff(t *testing.T) {
+	boom := fmt.Errorf("boom")
+	var wait time.Duration
+	var got []time.Duration
+	for range 8 {
+		wait = syncBackoff(wait, boom)
+		got = append(got, wait)
+	}
+	if got[0] != time.Minute || got[1] != 2*time.Minute || got[7] != time.Hour {
+		t.Errorf("waits after failures: %v", got)
+	}
+	if syncBackoff(wait, nil) != 0 {
+		t.Error("a sync that worked still waits")
+	}
+}
