@@ -85,7 +85,7 @@ func Detect(dir, version, addr string, out io.Writer) (*Install, error) {
 		return nil, fmt.Errorf("hakobu isn't installed as a service here (%w); install it with install.sh", err)
 	}
 	return &Install{
-		Dir: dir, Version: version, Out: out, addr: addr,
+		Dir: dir, Version: Tag(version), Out: out, addr: addr,
 		Rootless: regexp.MustCompile(`(?m)^User=hakobu$`).Match(unit),
 	}, nil
 }

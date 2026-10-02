@@ -54,6 +54,15 @@ var (
 	client      = &http.Client{Timeout: 10 * time.Minute}
 )
 
+// Tag writes a version the way release tags are, v1.2.3; the binary's own
+// version comes without the v.
+func Tag(version string) string {
+	if _, ok := parseTag(version); ok {
+		return "v" + strings.TrimPrefix(version, "v")
+	}
+	return version
+}
+
 var tagPattern = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 
 // Newer reports whether tag is a later release than current; a current

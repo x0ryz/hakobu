@@ -31,6 +31,8 @@ func TestNewer(t *testing.T) {
 		{"v0.7.0", "dev", true},
 		{"latest", "v0.6.0", false},
 		{"v0.7.0-rc1", "v0.6.0", false},
+		{"v0.7.0", "0.6.0", true}, // the binary's version comes without the v
+		{"v0.7.0", "0.7.0", false},
 	} {
 		if got := Newer(c.tag, c.current); got != c.want {
 			t.Errorf("Newer(%q, %q) = %v", c.tag, c.current, got)

@@ -61,7 +61,7 @@ func latestRelease() string {
 
 // Updates describes the running version and the latest release.
 func Updates(current string) UpdateInfo {
-	info := UpdateInfo{Current: current, Latest: latestRelease()}
+	info := UpdateInfo{Current: update.Tag(current), Latest: latestRelease()}
 	info.Available = info.Latest != "" && update.Newer(info.Latest, current)
 	_, err := os.Stat(updaterUnit)
 	info.Updater = err == nil
