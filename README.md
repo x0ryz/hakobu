@@ -47,7 +47,8 @@ curl -fsSL https://hakobu.dev/install.sh | sudo bash
 
 1. The installer shows a Cloudflare link to a new API token with hakobu's permissions
    filled in: read your domains, manage their DNS records, create a tunnel, keep
-   database backups in R2 and email you when something needs you. Select **Continue to summary** → **Create Token**, copy the
+   database backups in R2, email you when something needs you and run a Worker that
+   watches the panel from outside. Select **Continue to summary** → **Create Token**, copy the
    token and paste it into the terminal (it isn't echoed). Or set `CLOUDFLARE_API_TOKEN`
    before running the installer. Under **Zone Resources** you can pick just the domains
    hakobu should use instead of all of them: whoever takes over the server gets the
@@ -79,6 +80,13 @@ with Email Routing on; where it's off, hakobu turns it on through
 `mail.<panel address>`, which leaves the domain's own mail alone (turning it on for the
 domain itself would replace its MX records). A token made before v0.5 lacks the email permissions:
 give hakobu a new one with `setup --reconnect`.
+
+When the server, hakobu or the tunnel is down, hakobu can't email you itself. The
+**watchdog** (Settings → Notifications) is a Worker hakobu deploys to your Cloudflare
+account, free plan included: every minute it asks the panel's `/healthz` from outside
+and emails the same address when it stops answering and when it's back. It needs
+Workers Scripts Edit and Workers KV Storage Edit, which tokens made before it lack: add
+them to the token in Cloudflare, or use `setup --reconnect`.
 
 ### Claude (MCP)
 

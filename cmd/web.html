@@ -837,6 +837,17 @@
     {{if .CloudflareConnected}}
     <div hx-get="/settings/notify/form" hx-trigger="load" hx-swap="outerHTML"><p class="text-xs text-faint">Loading addresses…</p></div>
     {{else}}<p class="text-xs text-faint">Needs Cloudflare connected first.</p>{{end}}
+    {{if .Notify.On}}
+    <div class="flex items-start justify-between gap-3 border-t border-edge pt-4">
+      <div>
+        <h3 class="text-sm font-medium">Watchdog {{if .Watchdog.On}}<span class="text-xs font-normal text-good">on</span>{{end}}</h3>
+        <p class="text-sm text-dim">When the server, hakobu or the tunnel is down, hakobu can't email you about it. The watchdog is a Worker in your Cloudflare account (<span class="mono">{{if .Watchdog.On}}{{.Watchdog.Script}}{{else}}hakobu-watchdog-…{{end}}</span>) that checks the panel every minute from outside and emails you when it stops answering, and when it's back. It runs on Cloudflare's free plan.</p>
+        {{if not .Watchdog.On}}<p class="text-xs text-faint">Needs Workers Scripts Edit and Workers KV Storage Edit on hakobu's Cloudflare token: tokens made before this version lack them.</p>{{end}}
+      </div>
+      {{if .Watchdog.On}}<button hx-delete="/settings/watchdog" hx-confirm="Remove the watchdog's Worker from Cloudflare?" class="btn shrink-0">Turn off</button>
+      {{else}}<button hx-post="/settings/watchdog" class="btn shrink-0">Turn on</button>{{end}}
+    </div>
+    {{end}}
   </div>
 
   <div id="ai-apps" class="card">

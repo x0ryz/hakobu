@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -18,16 +20,23 @@ func TestTelemetryMovesOut(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hakobu.db")
-	s, err := Open(path)
+	if _, err := Open(filepath.Join(t.TempDir(), "hakobu.db")); err != nil { // loads a master key
+		t.Fatal(err)
+	}
+	// A database at schema 7, which kept telemetry in the panel's database.
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Back to schema 7, which kept telemetry in the panel's database.
-	if _, err := s.db.Exec(`CREATE TABLE telemetry_events (
-		id INTEGER PRIMARY KEY AUTOINCREMENT, app_name TEXT NOT NULL, kind TEXT NOT NULL,
-		level TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));
-		PRAGMA user_version = 7`); err != nil {
+	names, _ := fs.Glob(migrationFiles, "migrations/*.sql")
+	sort.Strings(names)
+	for _, name := range names[:7] {
+		body, _ := fs.ReadFile(migrationFiles, name)
+		if _, err := db.Exec(string(body)); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 7`); err != nil {
 		t.Fatal(err)
 	}
 	enc := func(v string) string {
@@ -41,13 +50,13 @@ func TestTelemetryMovesOut(t *testing.T) {
 		{"boom", timestamp(time.Now().Add(-time.Hour))},
 		{"ancient", timestamp(time.Now().AddDate(0, -2, 0))},
 	} {
-		if _, err := s.db.Exec(`INSERT INTO telemetry_events (app_name, kind, message, created_at) VALUES ('web', 'error', ?, ?)`, enc(e.msg), e.at); err != nil {
+		if _, err := db.Exec(`INSERT INTO telemetry_events (app_name, kind, message, created_at) VALUES ('web', 'error', ?, ?)`, enc(e.msg), e.at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	removeTelemetry(filepath.Join(dir, telemetryFile))
+	db.Close()
 
-	s, err = Open(path)
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

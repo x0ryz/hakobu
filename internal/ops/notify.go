@@ -232,9 +232,9 @@ func SetupNotifications(s *store.Store, email, name, from string) error {
 		return err
 	}
 	if hadPrev {
-		return undoNotify(c, cf.AccountID, prev, addr.Address, n.RoutedDomain)
+		err = undoNotify(c, cf.AccountID, prev, addr.Address, n.RoutedDomain)
 	}
-	return nil
+	return errors.Join(err, refreshWatchdog(s))
 }
 
 // senderDomain picks the domain to send from, the panel's host if from is
@@ -358,12 +358,17 @@ func tokenHint(err error) error {
 }
 
 // TurnOffNotifications stops the emails and removes from Cloudflare what
-// hakobu set up for them: the address, if hakobu added it, and Email
-// Routing for the domain hakobu turned it on for.
+// hakobu set up for them: the watchdog, the address, if hakobu added it,
+// and Email Routing for the domain hakobu turned it on for.
 func TurnOffNotifications(s *store.Store) error {
 	n, err := s.GetNotify(ctx())
 	if err != nil {
 		return nil
+	}
+	// The watchdog mails the same address: it goes first, or it would
+	// keep mailing with nothing left in hakobu to turn it off.
+	if err := DisableWatchdog(s); err != nil {
+		return fmt.Errorf("emails stay on: removing the watchdog failed: %w", err)
 	}
 	if err := s.DeleteNotify(ctx()); err != nil {
 		return err

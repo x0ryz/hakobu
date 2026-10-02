@@ -163,6 +163,13 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	registerOAuthRoutes(mux, s)
 	registerMCPRoutes(mux, s)
 	mux.Handle("GET /static/", staticHandler())
+	// The watchdog's check, from outside: the panel answers, so the server,
+	// hakobu and the tunnel are up. It tells nothing else to anyone.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, "ok")
+	})
 
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -641,7 +648,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
-			"Notify": ops.Notifications(s), "Update": ops.Updates(version),
+			"Notify": ops.Notifications(s), "Watchdog": ops.Watchdog(s), "Update": ops.Updates(version),
 		}
 		if usage, err := ops.CurrentUsage(s); err == nil {
 			data["Usage"] = usageRows(usage)
@@ -692,6 +699,14 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 		render(w, "notify-form", data)
 	})
+	action("POST /settings/watchdog", func(r *http.Request) (string, error) {
+		return "", ops.EnableWatchdog(s)
+	})
+
+	action("DELETE /settings/watchdog", func(r *http.Request) (string, error) {
+		return "", ops.DisableWatchdog(s)
+	})
+
 	action("POST /settings/notify/test", func(r *http.Request) (string, error) {
 		return "", ops.SendTestEmail(s)
 	})

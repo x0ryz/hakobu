@@ -209,6 +209,13 @@ type VolumeBackup struct {
 	Files       int64
 }
 
+type Watchdog struct {
+	ID            int64
+	Script        string
+	KvNamespaceID string
+	CreatedAt     string
+}
+
 type WebhookDelivery struct {
 	ID        string
 	CreatedAt string

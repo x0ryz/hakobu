@@ -14,6 +14,10 @@ test *args:
 test-docker *args:
     HAKOBU_DOCKER_TEST=1 go test ./... {{args}}
 
+# Tests of the watchdog Worker (needs bun)
+test-js:
+    bun test internal/ops
+
 # Regenerate the store code from migrations and queries
 gen:
     sqlc generate

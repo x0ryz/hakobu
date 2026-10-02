@@ -554,6 +554,15 @@ func (q *Queries) DeleteVolumesOfApp(ctx context.Context, appName string) error 
 	return err
 }
 
+const deleteWatchdog = `-- name: DeleteWatchdog :exec
+DELETE FROM watchdog
+`
+
+func (q *Queries) DeleteWatchdog(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteWatchdog)
+	return err
+}
+
 const deleteWorker = `-- name: DeleteWorker :exec
 DELETE FROM workers WHERE app_name = ?
 `
@@ -922,6 +931,24 @@ func (q *Queries) GetVolumeBackup(ctx context.Context, id int64) (VolumeBackup, 
 		&i.VerifiedAt,
 		&i.VerifyError,
 		&i.Files,
+	)
+	return i, err
+}
+
+const getWatchdog = `-- name: GetWatchdog :one
+
+SELECT id, script, kv_namespace_id, created_at FROM watchdog WHERE id = 1
+`
+
+// Watchdog
+func (q *Queries) GetWatchdog(ctx context.Context) (Watchdog, error) {
+	row := q.db.QueryRowContext(ctx, getWatchdog)
+	var i Watchdog
+	err := row.Scan(
+		&i.ID,
+		&i.Script,
+		&i.KvNamespaceID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1818,6 +1845,21 @@ func (q *Queries) SaveNotify(ctx context.Context, arg SaveNotifyParams) error {
 		arg.AddedAddress,
 		arg.RoutedDomain,
 	)
+	return err
+}
+
+const saveWatchdog = `-- name: SaveWatchdog :exec
+INSERT INTO watchdog (id, script, kv_namespace_id) VALUES (1, ?, ?)
+ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = excluded.kv_namespace_id
+`
+
+type SaveWatchdogParams struct {
+	Script        string
+	KvNamespaceID string
+}
+
+func (q *Queries) SaveWatchdog(ctx context.Context, arg SaveWatchdogParams) error {
+	_, err := q.db.ExecContext(ctx, saveWatchdog, arg.Script, arg.KvNamespaceID)
 	return err
 }
 

@@ -49,7 +49,7 @@ func TestTemplatesRender(t *testing.T) {
 			"Keep": 7, "Job": ops.DBJob{Running: "backing up"}},
 		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1",
 			"Rotation":            ops.Rotation{Started: "2026-09-30 10:00", Log: "done    x\n", Manual: []string{"GitHub App ..."}, Failures: 1},
-			"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@example.org", From: "hakobu@mail.p"},
+			"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@example.org", From: "hakobu@mail.p"}, "Watchdog": ops.WatchdogInfo{On: true, Script: "hakobu-watchdog-1a2b3c4d"},
 			"OAuthGrants": []store.OAuthGrant{{ID: 1, ClientName: "Claude", Scope: "read deploy", CreatedAt: "t", LastUsedAt: "u"}},
 			"Usage":       usageRows([]teldb.Sample{{Target: ops.HostTarget, Cpu: 1, CpuLimit: 4, Mem: 1 << 30, MemLimit: 8 << 30}, {Target: "app:web", Mem: 500 << 20, MemLimit: 512 << 20}, {Target: "service:postgres", Mem: 100 << 20}}),
 			"Update":      ops.UpdateInfo{Current: "v0.6.0", Latest: "v0.7.0", Available: true, Updater: true, HasLast: true, Last: update.Status{State: "running", To: "v0.7.0", Message: "downloading"}}},

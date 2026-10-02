@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,10 +34,19 @@ type fakeEmail struct {
 	mx        []string             // the apex's mail servers
 	subjects  []string
 	nextID    int
+	workers   map[string]workerUpload // the Workers uploaded, by name
+	kv        map[string]string       // KV namespace ID → title
+}
+
+// workerUpload is what a Worker was uploaded with.
+type workerUpload struct {
+	module   string
+	bindings []map[string]string
+	crons    []string
 }
 
 func newFakeEmail(t *testing.T) *fakeEmail {
-	f := &fakeEmail{routed: map[string]bool{}, addresses: map[string]bool{}, txt: map[string][2]string{}}
+	f := &fakeEmail{routed: map[string]bool{}, addresses: map[string]bool{}, txt: map[string][2]string{}, workers: map[string]workerUpload{}, kv: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -117,6 +127,52 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 			_ = json.Unmarshal(b, &m)
 			f.subjects = append(f.subjects, m.Subject)
 			ok(map[string]any{})
+		case route == "GET /accounts/acc/storage/kv/namespaces":
+			var list []map[string]string
+			for id, title := range f.kv {
+				list = append(list, map[string]string{"id": id, "title": title})
+			}
+			ok(list)
+		case route == "POST /accounts/acc/storage/kv/namespaces":
+			f.nextID++
+			id := fmt.Sprint("kv", f.nextID)
+			f.kv[id] = body["title"]
+			ok(map[string]string{"id": id})
+		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/accounts/acc/storage/kv/namespaces/"):
+			delete(f.kv, strings.TrimPrefix(r.URL.Path, "/accounts/acc/storage/kv/namespaces/"))
+			ok(nil)
+		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/accounts/acc/workers/scripts/") && strings.HasSuffix(r.URL.Path, "/schedules"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/accounts/acc/workers/scripts/"), "/schedules")
+			var crons []struct{ Cron string }
+			_ = json.Unmarshal(b, &crons)
+			w := f.workers[name]
+			w.crons = nil
+			for _, c := range crons {
+				w.crons = append(w.crons, c.Cron)
+			}
+			f.workers[name] = w
+			ok(nil)
+		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/accounts/acc/workers/scripts/"):
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Error(err)
+			}
+			var meta struct {
+				Main     string `json:"main_module"`
+				Bindings []map[string]string
+			}
+			_ = json.Unmarshal([]byte(r.FormValue("metadata")), &meta)
+			module := ""
+			if fh := r.MultipartForm.File[meta.Main]; len(fh) == 1 {
+				m, _ := fh[0].Open()
+				mb, _ := io.ReadAll(m)
+				module = string(mb)
+			}
+			f.workers[strings.TrimPrefix(r.URL.Path, "/accounts/acc/workers/scripts/")] = workerUpload{module: module, bindings: meta.Bindings}
+			ok(nil)
+		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/accounts/acc/workers/scripts/"):
+			delete(f.workers, strings.TrimPrefix(r.URL.Path, "/accounts/acc/workers/scripts/"))
+			ok(nil)
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
