@@ -14,6 +14,10 @@ var rootCmd = &cobra.Command{
 	Use:     "hakobu",
 	Short:   "Self-hosted deployment tool",
 	Version: version,
+	// Usage is for mistakes in the command line; once a command runs, its
+	// errors stand alone.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) { cmd.SilenceUsage = true },
+	SilenceErrors:    true, // Execute prints them
 }
 
 func Execute() {

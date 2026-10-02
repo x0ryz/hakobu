@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -117,6 +119,10 @@ func connectCloudflare(s *store.Store) error {
 	}
 }
 
+// errNoSecret is what readSecret returns when stdin is neither a terminal
+// nor holds a line, as under ssh without -t.
+var errNoSecret = errors.New("no Cloudflare API token: run this in a terminal, or set CLOUDFLARE_API_TOKEN")
+
 // readSecret reads a line without echoing it when stdin is a terminal.
 func readSecret() (string, error) {
 	if term.IsTerminal(int(os.Stdin.Fd())) {
@@ -125,6 +131,10 @@ func readSecret() (string, error) {
 		return string(b), err
 	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if errors.Is(err, io.EOF) && line == "" {
+		fmt.Println() // end the prompt's line
+		return "", errNoSecret
+	}
 	if err != nil && line == "" {
 		return "", err
 	}
