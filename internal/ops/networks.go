@@ -9,8 +9,8 @@ import (
 
 // Each project has its own networks, so an app can't reach the apps of
 // other projects, private ones included:
-//   - hakobu_<project>: its apps and workers, plus the shared Postgres and
-//     RustFS (whose databases and buckets have their own credentials);
+//   - hakobu_<project>: its apps and workers, plus the shared Postgres
+//     (whose databases have their own credentials);
 //   - hakobu_<project>_edge: its live app containers under their aliases,
 //     plus cloudflared, which reaches them there.
 //
@@ -29,7 +29,7 @@ func ensureProjectNetworks(project string) error {
 			return err
 		}
 	}
-	for container, network := range map[string]string{PostgresContainer: net, rustfsContainer: net, tunnelContainer: edge} {
+	for container, network := range map[string]string{PostgresContainer: net, tunnelContainer: edge} {
 		if st, _ := deploy.ContainerStatus(ctx(), container); st == "not found" || st == "unknown" {
 			continue
 		}
@@ -59,7 +59,7 @@ func ensureAllProjectNetworks(s *store.Store) error {
 // project's networks and removes them.
 func removeProjectNetworks(project string) error {
 	for _, n := range []string{ProjectNetwork(project), projectEdge(project)} {
-		for _, c := range []string{PostgresContainer, rustfsContainer, tunnelContainer} {
+		for _, c := range []string{PostgresContainer, tunnelContainer} {
 			if err := deploy.DisconnectNetwork(ctx(), c, n); err != nil {
 				return err
 			}

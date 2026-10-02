@@ -1,6 +1,6 @@
-// Package s3 is the little of S3 hakobu needs itself: creating the bucket of
-// a RustFS storage and a RustFS user that can reach only that bucket. Apps
-// talk to their storages with their own S3 clients.
+// Package s3 is the little of S3 hakobu needs itself: checking which
+// buckets a storage's keys reach. Apps talk to their storages with their
+// own S3 clients.
 package s3
 
 import (
@@ -8,7 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,11 +35,15 @@ type Client struct {
 	HTTP *http.Client
 }
 
+// R2Endpoint is R2's S3 endpoint for an account ID (%s); tests point it
+// at a fake.
+var R2Endpoint = "https://%s.r2.cloudflarestorage.com"
+
 // Endpoint derives R2's endpoint from the account ID; other providers use
 // the configured one.
 func Endpoint(st store.Storage) string {
 	if st.Provider == "r2" {
-		return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", st.AccountID)
+		return fmt.Sprintf(R2Endpoint, st.AccountID)
 	}
 	return st.Endpoint
 }
@@ -58,62 +62,23 @@ func NewClient(st store.Storage) *Client {
 	}
 }
 
-// CreateBucket treats "already exists" (409) as success.
-func (c *Client) CreateBucket() error {
-	return c.call(http.MethodPut, "/"+c.bucket, nil, nil, http.StatusOK, http.StatusConflict)
-}
-
-// RustFS's admin API (MinIO's, under /rustfs/admin/v3). The client must use
-// the root keys.
-
-const adminPrefix = "/rustfs/admin/v3/"
-
-// AddBucketUser creates a user with its own keys and a policy of the same
-// name allowing everything on the client's bucket and nothing else.
-func (c *Client) AddBucketUser(accessKey, secretKey string) error {
-	policy, _ := json.Marshal(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Effect":   "Allow",
-			"Action":   []string{"s3:*"},
-			"Resource": []string{"arn:aws:s3:::" + c.bucket, "arn:aws:s3:::" + c.bucket + "/*"},
-		}},
-	})
-	user, _ := json.Marshal(map[string]string{"secretKey": secretKey, "status": "enabled"})
-	for _, r := range []struct {
-		path  string
-		query url.Values
-		body  []byte
-	}{
-		{"add-canned-policy", url.Values{"name": {accessKey}}, policy},
-		{"add-user", url.Values{"accessKey": {accessKey}}, user},
-		{"set-user-or-group-policy", url.Values{"policyName": {accessKey}, "userOrGroup": {accessKey}, "isGroup": {"false"}}, nil},
-	} {
-		if err := c.call(http.MethodPut, adminPrefix+r.path, r.query, r.body, http.StatusOK); err != nil {
-			return err
-		}
+// CanList reports whether the client's keys may list bucket: false when
+// the service refuses them (403), an error when it can't tell.
+func (c *Client) CanList(bucket string) (bool, error) {
+	err := c.call(http.MethodGet, "/"+bucket, url.Values{"list-type": {"2"}, "max-keys": {"1"}}, nil, http.StatusOK)
+	var se *statusError
+	if errors.As(err, &se) && se.status == http.StatusForbidden {
+		return false, nil
 	}
-	return nil
+	return err == nil, err
 }
 
-// RemoveBucketUser deletes a user from AddBucketUser and its policy; the
-// bucket and its files stay. Ones already gone are fine.
-func (c *Client) RemoveBucketUser(accessKey string) error {
-	for _, r := range []struct {
-		path  string
-		query url.Values
-	}{
-		{"remove-user", url.Values{"accessKey": {accessKey}}},
-		{"remove-canned-policy", url.Values{"name": {accessKey}}},
-	} {
-		// RustFS answers a missing user with a 500 that says so.
-		err := c.call(http.MethodDelete, adminPrefix+r.path, r.query, nil, http.StatusOK, http.StatusNotFound)
-		if err != nil && !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "not found") {
-			return err
-		}
-	}
-	return nil
+type statusError struct {
+	status int
+	msg    string
 }
+
+func (e *statusError) Error() string { return e.msg }
 
 // call sends a signed request and checks its status.
 func (c *Client) call(method, path string, query url.Values, body []byte, okStatus ...int) error {
@@ -136,7 +101,7 @@ func (c *Client) call(method, path string, query url.Values, body []byte, okStat
 		}
 	}
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("s3 %s %s failed (%d): %s", method, path, resp.StatusCode, msg)
+	return &statusError{resp.StatusCode, fmt.Sprintf("s3 %s %s failed (%d): %s", method, path, resp.StatusCode, msg)}
 }
 
 func (c *Client) signedRequest(method, path string, query url.Values, body []byte) (*http.Request, error) {

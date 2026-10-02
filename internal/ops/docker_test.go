@@ -262,61 +262,6 @@ func dockerOut(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestDockerRustFSStorages runs its own RustFS (see TestMain).
-func TestDockerRustFSStorages(t *testing.T) {
-	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
-		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
-	}
-	t.Cleanup(func() {
-		_ = deploy.RemoveContainer(ctx(), rustfsContainer)
-		_ = deploy.RemoveVolume(ctx(), rustfsContainer+"_data")
-	})
-	s, err := store.Open(filepath.Join(t.TempDir(), "hakobu.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := CreateProject(s, "p"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := removeProjectNetworks("p"); err != nil {
-			t.Error(err)
-		}
-	})
-	for _, name := range []string{"files", "media"} {
-		if err := CreateStorage(s, "p", store.Storage{Name: name, Provider: "rustfs"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files, _ := s.GetStorage(ctx(), "files")
-	media, _ := s.GetStorage(ctx(), "media")
-	env, _ := deploy.ContainerEnv(ctx(), rustfsContainer)
-	if files.AccessKeyID == media.AccessKeyID || files.AccessKeyID == env["RUSTFS_ACCESS_KEY"] {
-		t.Fatalf("storages share keys: %q, %q (root %q)", files.AccessKeyID, media.AccessKeyID, env["RUSTFS_ACCESS_KEY"])
-	}
-
-	// files' keys reach its bucket, not media's.
-	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
-	as := func(keys, bucket store.Storage) error {
-		keys.Endpoint, keys.Bucket = "http://"+ip+":"+rustfsPort, bucket.Bucket
-		return rustfsClient(keys).CreateBucket()
-	}
-	if err := as(files, files); err != nil {
-		t.Errorf("own bucket: %v", err)
-	}
-	if err := as(files, media); err == nil {
-		t.Error("files' keys reach media's bucket")
-	}
-
-	// Deleting the storage revokes its keys.
-	if err := DeleteStorage(s, "files"); err != nil {
-		t.Fatal(err)
-	}
-	if err := as(files, files); err == nil {
-		t.Error("deleted storage's keys still work")
-	}
-}
-
 // TestDockerDataRollback runs its own Postgres container.
 func TestDockerDataRollback(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
@@ -460,7 +405,7 @@ func TestDockerDataRollback(t *testing.T) {
 	}
 }
 
-// TestDockerRotateSecrets runs its own Postgres and RustFS.
+// TestDockerRotateSecrets runs its own Postgres.
 func TestDockerRotateSecrets(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
@@ -469,10 +414,8 @@ func TestDockerRotateSecrets(t *testing.T) {
 	oldPG := PostgresContainer
 	PostgresContainer = "zt-pg-" + suffix
 	t.Cleanup(func() {
-		for _, c := range []string{PostgresContainer, rustfsContainer} {
-			_ = deploy.RemoveContainer(ctx(), c)
-			_ = deploy.RemoveVolume(ctx(), c+"_data")
-		}
+		_ = deploy.RemoveContainer(ctx(), PostgresContainer)
+		_ = deploy.RemoveVolume(ctx(), PostgresContainer+"_data")
 		PostgresContainer = oldPG
 	})
 	dir := t.TempDir()
@@ -495,7 +438,9 @@ func TestDockerRotateSecrets(t *testing.T) {
 	})
 	must(CreateDatabase(s, app.ProjectName, "zt"+suffix))
 	must(LinkDatabase(s, app.Name, "zt"+suffix))
-	must(CreateStorage(s, app.ProjectName, store.Storage{Name: "zt" + suffix, Provider: "rustfs"}))
+	p, _ := s.GetProject(ctx(), app.ProjectName)
+	must(s.CreateStorage(ctx(), store.CreateStorageParams{Name: "zt" + suffix, ProjectID: p.ID, Provider: "s3", Endpoint: "https://s3.example.com",
+		AccessKeyID: "key", SecretAccessKey: "secret", Bucket: "files", Region: "auto"}))
 	must(LinkStorage(s, app.Name, "zt"+suffix))
 	must(SetAppEnv(s, app.Name, "API_KEY=abc"))
 	must(SealVar(s, "app", app.Name, "SEALED", "shh"))
@@ -509,7 +454,6 @@ func TestDockerRotateSecrets(t *testing.T) {
 	must(promote(a, &out))
 
 	dbBefore, _ := s.GetDatabase(ctx(), "zt"+suffix)
-	stBefore, _ := s.GetStorage(ctx(), "zt"+suffix)
 	keyBefore, _ := os.ReadFile("master.key")
 
 	var log strings.Builder
@@ -519,9 +463,8 @@ func TestDockerRotateSecrets(t *testing.T) {
 	}
 
 	dbAfter, _ := s.GetDatabase(ctx(), "zt"+suffix)
-	stAfter, _ := s.GetStorage(ctx(), "zt"+suffix)
 	a, _ = s.GetApp(ctx(), app.Name)
-	if dbAfter.Password == dbBefore.Password || stAfter.AccessKeyID == stBefore.AccessKeyID || a.SentryKey == "oldsentrykey" {
+	if dbAfter.Password == dbBefore.Password || a.SentryKey == "oldsentrykey" {
 		t.Error("a secret wasn't replaced")
 	}
 	// The new database password works, the old one doesn't, connecting
@@ -533,19 +476,10 @@ func TestDockerRotateSecrets(t *testing.T) {
 	if login(string(dbAfter.Password)) != nil || login(string(dbBefore.Password)) == nil {
 		t.Error("database password not rotated")
 	}
-	// The storage's new keys work, the old ones are revoked.
-	ip, _ := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
-	reach := func(st store.Storage) error {
-		st.Endpoint = "http://" + ip + ":" + rustfsPort
-		return rustfsClient(st).CreateBucket()
-	}
-	if reach(stAfter) != nil || reach(stBefore) == nil {
-		t.Error("storage keys not rotated")
-	}
 	// The app was restarted with the new values and still serves.
 	expectServing(t, a, "v1")
 	env, _ := deploy.ContainerEnv(ctx(), a.ContainerName())
-	if !strings.Contains(env["DATABASE_URL"], string(dbAfter.Password)) || env["S3_ACCESS_KEY_ID"] != stAfter.AccessKeyID || env["SEALED"] != "shh" {
+	if !strings.Contains(env["DATABASE_URL"], string(dbAfter.Password)) || env["S3_ACCESS_KEY_ID"] != "key" || env["SEALED"] != "shh" {
 		t.Errorf("the app runs with old values: DATABASE_URL=%q S3_ACCESS_KEY_ID=%q", env["DATABASE_URL"], env["S3_ACCESS_KEY_ID"])
 	}
 	if _, _, err := s.SessionUser(ctx(), "tok"); err == nil {
@@ -556,6 +490,9 @@ func TestDockerRotateSecrets(t *testing.T) {
 	}
 	if !slices.ContainsFunc(manual, func(m string) bool { return strings.Contains(m, "API_KEY") && strings.Contains(m, "SEALED") }) {
 		t.Errorf("the user's variables aren't listed to replace: %v", manual)
+	}
+	if !slices.ContainsFunc(manual, func(m string) bool { return strings.Contains(m, "storage zt"+suffix) }) {
+		t.Errorf("the storage's keys aren't listed to replace: %v", manual)
 	}
 }
 

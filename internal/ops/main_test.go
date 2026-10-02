@@ -9,13 +9,12 @@ import (
 )
 
 // TestMain gives the shared containers and networks names of their own, so
-// tests never touch a real hakobu's Postgres, RustFS, cloudflared or
+// tests never touch a real hakobu's Postgres, cloudflared or
 // networks on the same Docker.
 func TestMain(m *testing.M) {
 	deploy.RunDialerIfChild() // rootless Docker: this binary is the dialer too
 	id := fmt.Sprint(os.Getpid())
 	PostgresContainer = "zt-postgres-" + id
-	rustfsContainer = "zt-rustfs-" + id
 	tunnelContainer = "zt-cloudflared-" + id
 	deploy.NetworkName = "zt-hakobu-" + id
 	deploy.EdgeNetwork = "zt-hakobu-edge-" + id

@@ -16,7 +16,8 @@ hakobu rebuilds and rolls out the new version with zero downtime.
   for 7 days even from a bug in hakobu. It doesn't stop someone who has taken over the server: the token
   can change the lock. Each backup's SHA-256 is kept and checked before a restore; each is test-restored
   into a temporary database right after upload, and old ones are rotated (the last 7, one a week for a month).
-- **Storages** for your apps' files: self-hosted RustFS on the same server, Cloudflare R2 or any S3-compatible bucket.
+- **Storages** for your apps' files: an R2 bucket hakobu creates in your Cloudflare account (you give it the keys of
+  a token for that bucket alone; hakobu checks they can't reach the backups), or any S3-compatible bucket.
 - **Variables**: shared per project and per service; linked databases/storages inject `DATABASE_URL`, `POSTGRES_*`, `S3_*`.
 - **Logs**: build/deploy logs, container output, and errors via an auto-injected `SENTRY_DSN`.
 - **Sign-in with GitHub only**, for the owner: the GitHub account that claimed the panel with the setup link.
@@ -85,7 +86,7 @@ sudo HAKOBU_RESTORE=hakobu-master-key-hakobu.example.com.txt bash install.sh
 It asks for a Cloudflare API token that can read R2 (or takes `CLOUDFLARE_API_TOKEN`),
 restores the newest panel backup and starts the panel on its old address, with its tunnel,
 GitHub App, projects and owner. Then redeploy the apps and restore each database from its
-backup page; files in volumes and RustFS storages stay with the old server. If the old
+backup page; files in volumes stay with the old server. If the old
 Cloudflare token was rolled since, run `setup --reconnect` as above.
 
 Hakobu runs as the unprivileged `hakobu` user, and
@@ -154,7 +155,7 @@ sqlc generate
 - `internal/store/` — SQLite: migrations, sqlc queries
 - `internal/secret/` — encryption of secrets in the database
 - `internal/backup/` — streaming pg_dump/restore
-- `internal/s3/` — creating RustFS buckets
+- `internal/s3/` — checking which buckets a storage's keys reach
 
 ## License
 

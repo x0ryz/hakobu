@@ -22,7 +22,7 @@ func TestTemplatesRender(t *testing.T) {
 	app := appView{App: store.App{Name: "web", ProjectName: "demo", Repo: "o/r", Port: 8081, ContainerPort: 8080, Env: "B=2", LinkedDB: "main", MemoryMB: 512, Cpus: 0.5}, State: deploy.State{Status: "running", Restarts: 2, OOMKilled: true}}
 	worker := &store.Worker{AppName: "web", Name: "worker", Command: "run", Env: "C=3"}
 	db := &store.Database{Name: "main", User: "main_user"}
-	storages := []store.Storage{{Name: "files", Provider: "rustfs", Bucket: "hakobu-files"}}
+	storages := []store.Storage{{Name: "files", Provider: "r2", Bucket: "hakobu-files-1", AccountID: "acc"}, {Name: "media", Provider: "s3", Bucket: "m", AccessKeyID: "k"}}
 
 	cases := map[string]any{
 		"login":   map[string]any{"Connected": true, "Error": "nope"},

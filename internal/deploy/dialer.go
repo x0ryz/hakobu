@@ -46,7 +46,7 @@ const dialerTimeout = 10 * time.Second
 // restarted under it), as opposed to the target refusing the connection.
 var errHelperGone = errors.New("container dialer not running")
 
-// ContainerTransport is for HTTP to containers (the app proxies, RustFS):
+// ContainerTransport is for HTTP to containers (the app proxies):
 // it dials through DialContainer and ignores HTTP_PROXY, which is meant for
 // the internet, not for container networks.
 var ContainerTransport = newContainerTransport()

@@ -10,7 +10,7 @@ build:
 test *args:
     go test ./... {{args}}
 
-# Tests against the local Docker (deploys, backups, RustFS)
+# Tests against the local Docker (deploys, backups)
 test-docker *args:
     HAKOBU_DOCKER_TEST=1 go test ./... {{args}}
 

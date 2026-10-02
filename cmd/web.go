@@ -287,13 +287,16 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		return "", ops.CreateStorage(s, r.PathValue("p"), store.Storage{
 			Name:            strings.TrimSpace(r.FormValue("name")),
 			Provider:        r.FormValue("provider"),
-			AccountID:       strings.TrimSpace(r.FormValue("account_id")),
 			Endpoint:        strings.TrimSpace(r.FormValue("endpoint")),
 			AccessKeyID:     strings.TrimSpace(r.FormValue("access_key_id")),
 			SecretAccessKey: secret.String(strings.TrimSpace(r.FormValue("secret_access_key"))),
 			Bucket:          strings.TrimSpace(r.FormValue("bucket")),
 			Region:          strings.TrimSpace(r.FormValue("region")),
 		})
+	})
+
+	action("POST /storages/{st}/keys", func(r *http.Request) (string, error) {
+		return "", ops.SetStorageKeys(s, r.PathValue("st"), r.FormValue("access_key_id"), r.FormValue("secret_access_key"))
 	})
 
 	action("DELETE /storages/{st}", func(r *http.Request) (string, error) {

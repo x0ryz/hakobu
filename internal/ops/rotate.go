@@ -115,23 +115,11 @@ func rotateSecrets(s *store.Store, out io.Writer) (manual []string, failures int
 		}
 	}
 
-	// Storages: RustFS keys are hakobu's own; R2/S3 keys are the user's.
-	var oldRustFS []store.Storage
+	// Storage keys are the owner's, made at the provider.
 	if storages, err := s.ListStorages(ctx()); err == nil {
 		for _, st := range storages {
-			if st.Provider != "rustfs" {
-				manual = append(manual, fmt.Sprintf("storage %s (%s, bucket %s): create a new access key at the provider and add the storage again", st.Name, st.Provider, st.Bucket))
-				continue
-			}
-			err := rotateRustFSKeys(s, st)
-			step("keys of storage "+st.Name, err)
-			if err == nil {
-				oldRustFS = append(oldRustFS, st)
-			}
-			if apps, err := s.AppsUsingStorage(ctx(), st.Name); err == nil {
-				for _, a := range apps {
-					restart[a] = true
-				}
+			if st.AccessKeyID != "" {
+				manual = append(manual, fmt.Sprintf("storage %s (%s, bucket %s): make a new token for the bucket at the provider, give the storage its keys, and delete the old token", st.Name, st.Provider, st.Bucket))
 			}
 		}
 	}
@@ -156,14 +144,6 @@ func rotateSecrets(s *store.Store, out io.Writer) (manual []string, failures int
 		}
 		manual = append(manual, userVariables(s, apps)...)
 	}
-	// Old RustFS users go once the apps run with the new keys.
-	for _, st := range oldRustFS {
-		if root, err := rustfsRoot(st.Bucket); err == nil {
-			err = root.RemoveBucketUser(st.AccessKeyID)
-			step("old keys of storage "+st.Name+" revoked", err)
-		}
-	}
-
 	step("everyone signed out", s.DeleteAllSessions(ctx()))
 	step("master key rotated (copies of the old key and database are worthless)", s.RotateMasterKey())
 	if BackupBucket(s) != "" {
@@ -200,28 +180,6 @@ func rotateDatabasePassword(s *store.Store, d store.Database) error {
 		return err
 	}
 	return s.SetDatabasePassword(ctx(), store.SetDatabasePasswordParams{Name: d.Name, Password: secret.String(password)})
-}
-
-// rotateRustFSKeys gives a RustFS storage a new user; the old one is
-// removed by the caller once the apps have the new keys.
-func rotateRustFSKeys(s *store.Store, st store.Storage) error {
-	root, err := rustfsRoot(st.Bucket)
-	if err != nil {
-		return err
-	}
-	access, err := RandomHex(9)
-	if err != nil {
-		return err
-	}
-	access = "hk" + access
-	key, err := RandomHex(20)
-	if err != nil {
-		return err
-	}
-	if err := root.AddBucketUser(access, key); err != nil {
-		return err
-	}
-	return s.SetStorageKeys(ctx(), store.SetStorageKeysParams{Name: st.Name, AccessKeyID: access, SecretAccessKey: secret.String(key)})
 }
 
 // restartApp redeploys the app's current image (and its worker) so they

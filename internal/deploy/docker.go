@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// NetworkName is the home network of hakobu's services (Postgres, RustFS),
+// NetworkName is the home network of hakobu's services (Postgres),
 // EdgeNetwork cloudflared's. Apps live on their project's networks (see
 // ops), which the services and cloudflared join as needed. Tests use
 // networks of their own.
@@ -153,7 +153,7 @@ func (o AppOptions) spec(imageTag string) (spec, hostConfig map[string]any) {
 		"Binds":       o.Binds,
 		// setuid binaries can't raise privileges inside the container.
 		"SecurityOpt": []string{"no-new-privileges"},
-		// Apps share their project's network with Postgres, RustFS and
+		// Apps share their project's network with Postgres and
 		// cloudflared: without raw sockets an app can't spoof ARP or DNS
 		// on it. The rest of Docker's defaults stay, for images that start
 		// as root and switch users.
@@ -202,8 +202,8 @@ func RunWorkerContainer(ctx context.Context, imageTag, name, command string, opt
 	return runContainer(ctx, name, spec, hostConfig)
 }
 
-// RunServiceContainer starts a hakobu-managed backing service (Postgres,
-// RustFS) with a persistent named volume.
+// RunServiceContainer starts a hakobu-managed backing service (Postgres)
+// with a persistent named volume.
 func RunServiceContainer(ctx context.Context, name, image string, env []string, mountPath string) (string, error) {
 	if err := pullImageIfMissing(ctx, image); err != nil {
 		return "", fmt.Errorf("failed to pull image %q: %w", image, err)

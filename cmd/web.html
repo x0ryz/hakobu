@@ -176,25 +176,41 @@
 </section>
 
 <section class="space-y-3 mb-10">
-  <h2 class="h2">Storages <span class="font-normal text-faint">· S3-compatible buckets</span></h2>
+  <h2 class="h2">Storages <span class="font-normal text-faint">· buckets for your apps' files</span></h2>
   {{range .Storages}}
-  <div class="row">
-    <span class="flex items-center gap-2 min-w-0"><span class="font-medium mono">{{.Name}}</span><span class="text-xs text-faint truncate">{{.Provider}} · {{.Bucket}}</span></span>
-    <button hx-delete="/storages/{{.Name}}" hx-confirm="Remove storage {{.Name}} from hakobu? The bucket and its files are not deleted." class="link hover:text-bad">Remove</button>
+  <div class="card space-y-2">
+    <div class="flex items-center justify-between gap-3">
+      <span class="flex items-center gap-2 min-w-0"><span class="font-medium mono">{{.Name}}</span><span class="text-xs text-faint truncate">{{.Provider}} · {{.Bucket}}</span>{{if not .AccessKeyID}}<span class="text-xs text-bad">needs keys</span>{{end}}</span>
+      <button hx-delete="/storages/{{.Name}}" hx-confirm="Remove storage {{.Name}} from hakobu? The bucket and its files are not deleted." class="link hover:text-bad">Remove</button>
+    </div>
+    <details {{if not .AccessKeyID}}open{{end}}>
+      <summary class="cursor-pointer text-xs text-dim">{{if .AccessKeyID}}Replace keys{{else}}Add the keys apps get{{end}}</summary>
+      {{if eq .Provider "r2"}}
+      <ol class="text-xs text-dim list-decimal pl-5 space-y-1 mt-2">
+        <li>In Cloudflare open <a href="https://dash.cloudflare.com/{{.AccountID}}/r2/api-tokens" target="_blank" class="underline">R2 → API tokens</a> and create an <b>Account API token</b>.</li>
+        <li>Permissions: <b>Object Read &amp; Write</b>; buckets: <b>Apply to specific buckets only</b> → <span class="mono">{{.Bucket}}</span>.</li>
+        <li>Paste the token's <b>Access Key ID</b> and <b>Secret Access Key</b> here. hakobu checks they reach this bucket and not the backups.</li>
+      </ol>
+      {{end}}
+      <form hx-post="/storages/{{.Name}}/keys" class="flex flex-wrap gap-2 mt-2">
+        <input name="access_key_id" required placeholder="Access key ID" class="input flex-1 min-w-48 mono">
+        <input name="secret_access_key" required type="password" placeholder="Secret access key" class="input flex-1 min-w-48 mono">
+        <button class="btn">Save keys</button>
+      </form>
+    </details>
   </div>
   {{end}}
   <details class="card">
     <summary class="cursor-pointer text-sm font-medium">+ Add storage</summary>
-    <form hx-post="/projects/{{.Project.Name}}/storages" x-data="{provider:'rustfs'}" class="space-y-2">
+    <form hx-post="/projects/{{.Project.Name}}/storages" x-data="{provider:'r2'}" class="space-y-2">
       <input name="name" placeholder="name, e.g. files" required class="input w-full">
       <select name="provider" x-model="provider" class="input w-full">
-        <option value="rustfs">Self-hosted on this server (RustFS)</option>
-        <option value="r2">Cloudflare R2</option>
-        <option value="s3">S3-compatible (AWS, MinIO, …)</option>
+        <option value="r2">Cloudflare R2 in your account</option>
+        <option value="s3">S3-compatible (AWS, Backblaze, MinIO, …)</option>
       </select>
-      <div x-show="provider!=='rustfs'" x-cloak class="space-y-2">
-        <input name="account_id" placeholder="Cloudflare account ID" x-show="provider==='r2'" class="input w-full mono">
-        <input name="endpoint" placeholder="Endpoint URL" x-show="provider==='s3'" class="input w-full mono">
+      <p x-show="provider==='r2'" class="text-xs text-faint">hakobu creates the bucket in your Cloudflare account; then you give it the keys of a token for that bucket alone. R2's free plan includes 10 GB, and downloads are free.</p>
+      <div x-show="provider==='s3'" x-cloak class="space-y-2">
+        <input name="endpoint" placeholder="Endpoint URL" class="input w-full mono">
         <input name="bucket" placeholder="Bucket" class="input w-full mono">
         <input name="access_key_id" placeholder="Access key ID" class="input w-full mono">
         <input name="secret_access_key" type="password" placeholder="Secret access key" class="input w-full mono">
@@ -374,7 +390,7 @@
         <label class="label">Storage</label>
         <select name="storage" class="input w-full">
           <option value="">none</option>
-          {{range .Storages}}<option value="{{.Name}}" {{if eq .Name $.App.LinkedStorage}}selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
+          {{range .Storages}}<option value="{{.Name}}" {{if eq .Name $.App.LinkedStorage}}selected{{end}} {{if not .AccessKeyID}}disabled{{end}}>{{.Name}} ({{.Provider}}{{if not .AccessKeyID}}, needs keys{{end}})</option>{{end}}
         </select>
       </div>
     </div>

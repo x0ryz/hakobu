@@ -2,22 +2,20 @@ package ops
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
-	"time"
 
-	"github.com/x0ryz/hakobu/internal/config"
-	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/s3"
 	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
-// RustFS is the optional self-hosted S3 service, one container shared by all
-// "rustfs" storages (one bucket each). Tests run their own.
-var rustfsContainer = "hakobu-rustfs"
-
-const rustfsPort = "9000"
+// Storages are buckets for the apps' files: R2 in the Cloudflare account
+// hakobu is connected to, or any S3-compatible service. hakobu creates an
+// R2 storage's bucket itself; the keys the app gets come from an R2 API
+// token the owner makes for that bucket alone (hakobu's own token can't
+// make one, and its keys would reach every bucket, the backups included).
+// Before keys are saved, hakobu checks they reach their bucket and not the
+// backups.
 
 func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 	if err := checkName("storage", st.Name); err != nil {
@@ -35,16 +33,16 @@ func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 		st.Region = "auto"
 	}
 	switch st.Provider {
-	case "rustfs":
-		if err := provisionRustFS(&st); err != nil {
+	case "r2":
+		if err := createR2Bucket(s, &st); err != nil {
 			return err
 		}
-		if err := ensureProjectNetworks(projectName); err != nil {
-			return err
+	case "s3":
+		if st.Endpoint == "" || st.Bucket == "" {
+			return fmt.Errorf("endpoint and bucket are required")
 		}
-	case "r2", "s3":
-		if st.AccessKeyID == "" || st.SecretAccessKey == "" || st.Bucket == "" {
-			return fmt.Errorf("access key, secret key and bucket are required")
+		if err := checkStorageKeys(s, st); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unsupported storage provider %q", st.Provider)
@@ -52,12 +50,16 @@ func CreateStorage(s *store.Store, projectName string, st store.Storage) error {
 	return s.CreateStorage(ctx(), store.CreateStorageParams(st))
 }
 
-// provisionRustFS starts the RustFS container on first use, creates the
-// storage's bucket and a RustFS user that can reach only that bucket, so an
-// app linked to one storage can't read another project's files. The root
-// keys stay in the container's environment, for hakobu alone.
-func provisionRustFS(st *store.Storage) error {
-	st.Endpoint = "http://" + rustfsContainer + ":" + rustfsPort
+// createR2Bucket creates the storage's bucket in the connected account. Its
+// keys come later (SetStorageKeys), for a token limited to this bucket.
+func createR2Bucket(s *store.Store, st *store.Storage) error {
+	c, cf, err := cfClient(s)
+	if err != nil {
+		return err
+	}
+	if cf.AccountID == "" {
+		return fmt.Errorf("finish `hakobu setup` first")
+	}
 	// Removing a storage keeps its bucket and files: the random part keeps
 	// a later storage of the same name, maybe in another project, from
 	// being handed them.
@@ -65,72 +67,49 @@ func provisionRustFS(st *store.Storage) error {
 	if err != nil {
 		return err
 	}
-	st.Bucket = "hakobu-" + st.Name + "-" + suffix
-	root, err := rustfsRoot(st.Bucket)
-	if err != nil {
-		return err
+	st.AccountID, st.Bucket = cf.AccountID, "hakobu-"+st.Name+"-"+suffix
+	st.AccessKeyID, st.SecretAccessKey = "", ""
+	if err := c.CreateBucket(cf.AccountID, st.Bucket); err != nil {
+		return fmt.Errorf("creating the R2 bucket: %w", err)
 	}
-	// RustFS answers 503 until its storage is up, so the first successful
-	// request is the bucket itself.
-	if !deploy.WaitHealthy(60, time.Second, func() bool { err = root.CreateBucket(); return err == nil }) {
-		return fmt.Errorf("rustfs failed to become ready: %w", err)
-	}
-	// MinIO-style limits: access keys up to 20 characters, secrets up to 40.
-	if st.AccessKeyID, err = RandomHex(9); err != nil {
-		return err
-	}
-	st.AccessKeyID = "hk" + st.AccessKeyID
-	key, err := RandomHex(20)
-	if err != nil {
-		return err
-	}
-	st.SecretAccessKey = secret.String(key)
-	return root.AddBucketUser(st.AccessKeyID, key)
+	return nil
 }
 
-// rustfsRoot returns a client with RustFS's root keys for bucket, starting
-// the container (and choosing the keys) if needed. RustFS is only reachable
-// by container name inside docker, so the client goes via its IP.
-func rustfsRoot(bucket string) (*s3.Client, error) {
-	env, err := deploy.ContainerEnv(ctx(), rustfsContainer)
+// SetStorageKeys gives a storage the keys its apps get, once they're known
+// to reach its bucket and not the backups.
+func SetStorageKeys(s *store.Store, name, accessKeyID, secretAccessKey string) error {
+	st, err := s.GetStorage(ctx(), name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if env != nil {
-		err = deploy.StartContainer(ctx(), rustfsContainer)
-	} else {
-		env = map[string]string{"RUSTFS_ADDRESS": ":" + rustfsPort, "RUSTFS_CONSOLE_ENABLE": "false"}
-		if env["RUSTFS_ACCESS_KEY"], err = RandomHex(16); err != nil {
-			return nil, err
-		}
-		if env["RUSTFS_SECRET_KEY"], err = RandomHex(32); err != nil {
-			return nil, err
-		}
-		var list []string
-		for k, v := range env {
-			list = append(list, k+"="+v)
-		}
-		_, err = deploy.RunServiceContainer(ctx(), rustfsContainer, config.RustFSImage, list, "/data")
+	st.AccessKeyID, st.SecretAccessKey = strings.TrimSpace(accessKeyID), secret.String(strings.TrimSpace(secretAccessKey))
+	if err := checkStorageKeys(s, st); err != nil {
+		return err
 	}
-	if err != nil {
-		return nil, err
-	}
-	ip, err := deploy.ContainerIP(ctx(), rustfsContainer, deploy.NetworkName)
-	if err != nil {
-		return nil, err
-	}
-	return rustfsClient(store.Storage{
-		Endpoint: "http://" + ip + ":" + rustfsPort, Bucket: bucket,
-		AccessKeyID: env["RUSTFS_ACCESS_KEY"], SecretAccessKey: secret.String(env["RUSTFS_SECRET_KEY"]),
-	}), nil
+	return s.SetStorageKeys(ctx(), store.SetStorageKeysParams{Name: st.Name, AccessKeyID: st.AccessKeyID, SecretAccessKey: st.SecretAccessKey})
 }
 
-// rustfsClient talks to RustFS at its container IP, which only the container
-// dialer reaches under rootless Docker.
-func rustfsClient(st store.Storage) *s3.Client {
+// checkStorageKeys makes sure the storage's keys can list its bucket and,
+// on R2, can't list the backup bucket: an app with keys to the backups
+// could read every database's dumps.
+func checkStorageKeys(s *store.Store, st store.Storage) error {
+	if st.AccessKeyID == "" || st.SecretAccessKey == "" {
+		return fmt.Errorf("access key ID and secret access key are required")
+	}
 	c := s3.NewClient(st)
-	c.HTTP = &http.Client{Transport: deploy.ContainerTransport}
-	return c
+	if ok, err := c.CanList(st.Bucket); err != nil {
+		return fmt.Errorf("checking the keys: %w", err)
+	} else if !ok {
+		return fmt.Errorf("these keys can't read bucket %s: give the token Object Read & Write on it", st.Bucket)
+	}
+	if backups := BackupBucket(s); st.Provider == "r2" && backups != "" && backups != st.Bucket {
+		if ok, err := c.CanList(backups); err != nil {
+			return fmt.Errorf("checking the keys: %w", err)
+		} else if ok {
+			return fmt.Errorf("these keys also reach %s, the database backups: make a token for bucket %s alone", backups, st.Bucket)
+		}
+	}
+	return nil
 }
 
 func DeleteStorage(s *store.Store, name string) error {
@@ -141,26 +120,13 @@ func DeleteStorage(s *store.Store, name string) error {
 	if len(apps) > 0 {
 		return fmt.Errorf("storage %s is still used by %s — unlink it first", name, strings.Join(apps, ", "))
 	}
-	st, err := s.GetStorage(ctx(), name)
-	if err != nil {
-		return err
-	}
-	// The bucket and its files stay, as with R2 and S3; only the keys go.
-	if st.Provider == "rustfs" {
-		root, err := rustfsRoot(st.Bucket)
-		if err != nil {
-			return err
-		}
-		if err := root.RemoveBucketUser(st.AccessKeyID); err != nil {
-			return err
-		}
-	}
+	// The bucket and its files stay; delete them at the provider.
 	return s.DeleteStorage(ctx(), name)
 }
 
 func storageEnv(st store.Storage) []string {
 	provider := st.Provider
-	if provider == "rustfs" {
+	if provider == "rustfs" { // made before v0.6: its own endpoint, like S3
 		provider = "s3"
 	}
 	env := []string{

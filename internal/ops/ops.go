@@ -225,6 +225,9 @@ func LinkStorage(s *store.Store, appName, storageName string) error {
 		if err != nil || st.ProjectID != app.ProjectID {
 			return fmt.Errorf("storage %q not found in project %s", storageName, app.ProjectName)
 		}
+		if st.AccessKeyID == "" {
+			return fmt.Errorf("storage %s has no keys yet: add them on the project page", storageName)
+		}
 	}
 	return s.SetAppLinkedStorage(ctx(), store.SetAppLinkedStorageParams{Name: appName, LinkedStorage: storageName})
 }
