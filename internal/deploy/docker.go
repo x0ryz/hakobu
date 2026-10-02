@@ -321,6 +321,65 @@ func RemoveVolume(ctx context.Context, name string) error {
 	return fmt.Errorf("failed to remove volume %s (%d): %s", name, status, respBody)
 }
 
+// VolumeExists reports whether Docker has a volume named name.
+func VolumeExists(ctx context.Context, name string) (bool, error) {
+	respBody, status, err := dockerRequest(ctx, "GET", "/volumes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, fmt.Errorf("volume inspect failed (%d): %s", status, respBody)
+}
+
+// RunningWithVolume lists the running containers that mount volume.
+func RunningWithVolume(ctx context.Context, volume string) ([]string, error) {
+	filters, _ := json.Marshal(map[string][]string{"volume": {volume}, "status": {"running"}})
+	respBody, status, err := dockerRequest(ctx, "GET", "/containers/json?filters="+url.QueryEscape(string(filters)), nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("container list failed (%d): %s", status, respBody)
+	}
+	var list []struct{ Names []string }
+	if err := json.Unmarshal(respBody, &list); err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, c := range list {
+		if len(c.Names) > 0 {
+			names = append(names, strings.TrimPrefix(c.Names[0], "/"))
+		}
+	}
+	return names, nil
+}
+
+// PauseContainer freezes a container's processes; UnpauseContainer lets
+// them go on where they were.
+func PauseContainer(ctx context.Context, name string) error {
+	return pauseOrUnpause(ctx, name, "pause")
+}
+
+func UnpauseContainer(ctx context.Context, name string) error {
+	return pauseOrUnpause(ctx, name, "unpause")
+}
+
+func pauseOrUnpause(ctx context.Context, name, action string) error {
+	respBody, status, err := dockerRequest(ctx, "POST", "/containers/"+url.PathEscape(name)+"/"+action, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent {
+		return fmt.Errorf("%s of %s failed (%d): %s", action, name, status, respBody)
+	}
+	return nil
+}
+
 // VolumeNames lists volumes whose name starts with prefix.
 func VolumeNames(ctx context.Context, prefix string) ([]string, error) {
 	filters, _ := json.Marshal(map[string][]string{"name": {prefix}})

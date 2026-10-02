@@ -72,6 +72,7 @@ type Backup struct {
 	VerifiedAt  string
 	VerifyError string
 	Tables      int64
+	FileKey     secret.String
 }
 
 type Cloudflare struct {
@@ -201,6 +202,21 @@ type Volume struct {
 	AppName   string
 	Name      string
 	MountPath string
+}
+
+type VolumeBackup struct {
+	ID          int64
+	AppName     string
+	Volume      string
+	ObjectKey   string
+	Parts       int64
+	SizeBytes   int64
+	SHA256      string
+	FileKey     secret.String
+	CreatedAt   string
+	VerifiedAt  string
+	VerifyError string
+	Files       int64
 }
 
 type WebhookDelivery struct {

@@ -603,3 +603,65 @@ func TestDockerRestoreOnNewServer(t *testing.T) {
 	dockerOut(t, "exec", "-e", "PGPASSWORD="+string(d.Password), PostgresContainer, "psql", "-h", "127.0.0.1", "-U", d.User, "-d", d.Name, "-c", "SELECT 1")
 	must(DeleteDatabase(s, d.Name))
 }
+
+// TestDockerVolumeBackup backs a volume up while the app writes to it,
+// changes the volume and restores the backup.
+func TestDockerVolumeBackup(t *testing.T) {
+	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
+		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
+	}
+	objects, _ := fakeR2(t)
+	dir := t.TempDir()
+	t.Chdir(dir) // data/tmp
+	s, err := store.Open(filepath.Join(dir, "hakobu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(s.SaveCloudflareToken(ctx(), "tok"))
+	must(s.SaveCloudflareTunnel(ctx(), store.SaveCloudflareTunnelParams{AccountID: "acc"}))
+	must(SetupBackups(s))
+	app := newDockerTestApp(t, s)
+	t.Cleanup(func() { _ = DeleteApp(s, app.Name) })
+	must(AddVolume(s, app.Name, "data", "/data"))
+	buildTestImage(t, nextImageTag(app), "v1")
+	var out strings.Builder
+	must(rollOut(s, app, nextImageTag(app), &out))
+	must(promote(app, &out))
+	app, _ = s.GetApp(ctx(), app.Name)
+	live := app.ContainerName()
+	dockerOut(t, "exec", live, "sh", "-c", "echo secret-contents > /data/file && mkdir -p /data/sub && echo x > /data/sub/y && chown 1234:5678 /data/file && chmod 600 /data/file")
+
+	id, err := BackupVolume(s, app.Name, "data")
+	must(err)
+	if st := dockerOut(t, "inspect", "-f", "{{.State.Status}}", live); st != "running" {
+		t.Errorf("app is %s after the backup, want running", st)
+	}
+	for k, v := range objects {
+		if strings.Contains(string(v), "secret-contents") {
+			t.Errorf("%s holds the volume in the clear", k)
+		}
+	}
+	must(VerifyVolumeBackup(s, id))
+	b, _ := s.GetVolumeBackup(ctx(), id)
+	if b.VerifyError != "" || b.Files < 3 { // log, file, sub/y
+		t.Errorf("check: %d files, %q", b.Files, b.VerifyError)
+	}
+
+	dockerOut(t, "exec", live, "sh", "-c", "rm -r /data/sub && echo changed > /data/file && touch /data/new")
+	must(StartVolumeRestore(s, app.Name, "data", id))
+	waitIdle(t, app.Name)
+	if j := VolumeJob(app.Name, "data"); j.Failed {
+		t.Fatalf("restore: %s", j.Last)
+	}
+	got := dockerOut(t, "exec", live, "sh", "-c", "cat /data/file /data/sub/y; ls /data; stat -c '%u:%g %a' /data/file")
+	if want := "secret-contents\nx\nfile\nlog\nsub\n1234:5678 600"; got != want {
+		t.Errorf("after restore:\n%s\nwant:\n%s", got, want)
+	}
+	expectServing(t, app, "v1")
+}

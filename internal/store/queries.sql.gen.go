@@ -124,7 +124,7 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) error {
 
 const createBackup = `-- name: CreateBackup :one
 
-INSERT INTO backups (database, object_key, parts, size_bytes, sha256) VALUES (?, ?, ?, ?, ?) RETURNING id
+INSERT INTO backups (database, object_key, parts, size_bytes, sha256, file_key) VALUES (?, ?, ?, ?, ?, ?) RETURNING id
 `
 
 type CreateBackupParams struct {
@@ -133,6 +133,7 @@ type CreateBackupParams struct {
 	Parts     int64
 	SizeBytes int64
 	SHA256    string
+	FileKey   secret.String
 }
 
 // Backups
@@ -143,6 +144,7 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.Parts,
 		arg.SizeBytes,
 		arg.SHA256,
+		arg.FileKey,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -347,6 +349,35 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 	return err
 }
 
+const createVolumeBackup = `-- name: CreateVolumeBackup :one
+INSERT INTO volume_backups (app_name, volume, object_key, parts, size_bytes, sha256, file_key) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+`
+
+type CreateVolumeBackupParams struct {
+	AppName   string
+	Volume    string
+	ObjectKey string
+	Parts     int64
+	SizeBytes int64
+	SHA256    string
+	FileKey   secret.String
+}
+
+func (q *Queries) CreateVolumeBackup(ctx context.Context, arg CreateVolumeBackupParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, createVolumeBackup,
+		arg.AppName,
+		arg.Volume,
+		arg.ObjectKey,
+		arg.Parts,
+		arg.SizeBytes,
+		arg.SHA256,
+		arg.FileKey,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const deleteAllOAuthGrants = `-- name: DeleteAllOAuthGrants :exec
 DELETE FROM oauth_grants
 `
@@ -516,6 +547,38 @@ func (q *Queries) DeleteVolume(ctx context.Context, arg DeleteVolumeParams) erro
 	return err
 }
 
+const deleteVolumeBackup = `-- name: DeleteVolumeBackup :exec
+DELETE FROM volume_backups WHERE id = ?
+`
+
+func (q *Queries) DeleteVolumeBackup(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteVolumeBackup, id)
+	return err
+}
+
+const deleteVolumeBackupsOf = `-- name: DeleteVolumeBackupsOf :exec
+DELETE FROM volume_backups WHERE app_name = ? AND volume = ?
+`
+
+type DeleteVolumeBackupsOfParams struct {
+	AppName string
+	Volume  string
+}
+
+func (q *Queries) DeleteVolumeBackupsOf(ctx context.Context, arg DeleteVolumeBackupsOfParams) error {
+	_, err := q.db.ExecContext(ctx, deleteVolumeBackupsOf, arg.AppName, arg.Volume)
+	return err
+}
+
+const deleteVolumeBackupsOfApp = `-- name: DeleteVolumeBackupsOfApp :exec
+DELETE FROM volume_backups WHERE app_name = ?
+`
+
+func (q *Queries) DeleteVolumeBackupsOfApp(ctx context.Context, appName string) error {
+	_, err := q.db.ExecContext(ctx, deleteVolumeBackupsOfApp, appName)
+	return err
+}
+
 const deleteVolumesOfApp = `-- name: DeleteVolumesOfApp :exec
 DELETE FROM volumes WHERE app_name = ?
 `
@@ -643,7 +706,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id int64) (App, error) {
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE id = ?
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables, file_key FROM backups WHERE id = ?
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
@@ -660,6 +723,7 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 		&i.VerifiedAt,
 		&i.VerifyError,
 		&i.Tables,
+		&i.FileKey,
 	)
 	return i, err
 }
@@ -896,6 +960,30 @@ func (q *Queries) GetTelemetryEvent(ctx context.Context, arg GetTelemetryEventPa
 	return i, err
 }
 
+const getVolumeBackup = `-- name: GetVolumeBackup :one
+SELECT id, app_name, volume, object_key, parts, size_bytes, sha256, file_key, created_at, verified_at, verify_error, files FROM volume_backups WHERE id = ?
+`
+
+func (q *Queries) GetVolumeBackup(ctx context.Context, id int64) (VolumeBackup, error) {
+	row := q.db.QueryRowContext(ctx, getVolumeBackup, id)
+	var i VolumeBackup
+	err := row.Scan(
+		&i.ID,
+		&i.AppName,
+		&i.Volume,
+		&i.ObjectKey,
+		&i.Parts,
+		&i.SizeBytes,
+		&i.SHA256,
+		&i.FileKey,
+		&i.CreatedAt,
+		&i.VerifiedAt,
+		&i.VerifyError,
+		&i.Files,
+	)
+	return i, err
+}
+
 const getWorker = `-- name: GetWorker :one
 SELECT app_name, name, command, env FROM workers WHERE app_name = ?
 `
@@ -929,7 +1017,7 @@ func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKi
 }
 
 const listAllBackups = `-- name: ListAllBackups :many
-SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables, file_key FROM backups WHERE database = ? ORDER BY id DESC
 `
 
 func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup, error) {
@@ -952,6 +1040,7 @@ func (q *Queries) ListAllBackups(ctx context.Context, database string) ([]Backup
 			&i.VerifiedAt,
 			&i.VerifyError,
 			&i.Tables,
+			&i.FileKey,
 		); err != nil {
 			return nil, err
 		}
@@ -984,6 +1073,51 @@ func (q *Queries) ListAllSealedVars(ctx context.Context) ([]SealedVar, error) {
 			&i.Owner,
 			&i.Key,
 			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllVolumeBackups = `-- name: ListAllVolumeBackups :many
+SELECT id, app_name, volume, object_key, parts, size_bytes, sha256, file_key, created_at, verified_at, verify_error, files FROM volume_backups WHERE app_name = ? AND volume = ? ORDER BY id DESC
+`
+
+type ListAllVolumeBackupsParams struct {
+	AppName string
+	Volume  string
+}
+
+func (q *Queries) ListAllVolumeBackups(ctx context.Context, arg ListAllVolumeBackupsParams) ([]VolumeBackup, error) {
+	rows, err := q.db.QueryContext(ctx, listAllVolumeBackups, arg.AppName, arg.Volume)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VolumeBackup
+	for rows.Next() {
+		var i VolumeBackup
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.Volume,
+			&i.ObjectKey,
+			&i.Parts,
+			&i.SizeBytes,
+			&i.SHA256,
+			&i.FileKey,
+			&i.CreatedAt,
+			&i.VerifiedAt,
+			&i.VerifyError,
+			&i.Files,
 		); err != nil {
 			return nil, err
 		}
@@ -1182,7 +1316,7 @@ func (q *Queries) ListAppsByRepo(ctx context.Context, repo string) ([]App, error
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
+SELECT id, "database", object_key, parts, size_bytes, sha256, created_at, verified_at, verify_error, tables, file_key FROM backups WHERE database = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -1210,6 +1344,7 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 			&i.VerifiedAt,
 			&i.VerifyError,
 			&i.Tables,
+			&i.FileKey,
 		); err != nil {
 			return nil, err
 		}
@@ -1562,6 +1697,52 @@ func (q *Queries) ListTelemetryEvents(ctx context.Context, arg ListTelemetryEven
 			&i.Message,
 			&i.Payload,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVolumeBackups = `-- name: ListVolumeBackups :many
+SELECT id, app_name, volume, object_key, parts, size_bytes, sha256, file_key, created_at, verified_at, verify_error, files FROM volume_backups WHERE app_name = ? AND volume = ? ORDER BY id DESC LIMIT ?
+`
+
+type ListVolumeBackupsParams struct {
+	AppName string
+	Volume  string
+	Limit   int64
+}
+
+func (q *Queries) ListVolumeBackups(ctx context.Context, arg ListVolumeBackupsParams) ([]VolumeBackup, error) {
+	rows, err := q.db.QueryContext(ctx, listVolumeBackups, arg.AppName, arg.Volume, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VolumeBackup
+	for rows.Next() {
+		var i VolumeBackup
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.Volume,
+			&i.ObjectKey,
+			&i.Parts,
+			&i.SizeBytes,
+			&i.SHA256,
+			&i.FileKey,
+			&i.CreatedAt,
+			&i.VerifiedAt,
+			&i.VerifyError,
+			&i.Files,
 		); err != nil {
 			return nil, err
 		}
@@ -2097,6 +2278,27 @@ UPDATE cloudflare SET tunnel_token = ? WHERE id = 1
 
 func (q *Queries) SetTunnelToken(ctx context.Context, tunnelToken secret.String) error {
 	_, err := q.db.ExecContext(ctx, setTunnelToken, tunnelToken)
+	return err
+}
+
+const setVolumeBackupVerified = `-- name: SetVolumeBackupVerified :exec
+UPDATE volume_backups SET verified_at = ?, verify_error = ?, files = ? WHERE id = ?
+`
+
+type SetVolumeBackupVerifiedParams struct {
+	VerifiedAt  string
+	VerifyError string
+	Files       int64
+	ID          int64
+}
+
+func (q *Queries) SetVolumeBackupVerified(ctx context.Context, arg SetVolumeBackupVerifiedParams) error {
+	_, err := q.db.ExecContext(ctx, setVolumeBackupVerified,
+		arg.VerifiedAt,
+		arg.VerifyError,
+		arg.Files,
+		arg.ID,
+	)
 	return err
 }
 

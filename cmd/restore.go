@@ -68,6 +68,6 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("Restored the panel of %s as it was at %s.\n", kf.PublicHost, at.UTC().Format("2006-01-02 15:04 UTC"))
-	fmt.Println("Its apps are redeployed from GitHub by Redeploy; databases come back from their backups (database page → Restore).")
+	fmt.Println("Its apps are redeployed from GitHub by Redeploy; databases and volumes come back from their backups (database page or app page → Restore).")
 	return nil
 }

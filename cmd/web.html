@@ -428,7 +428,7 @@
     <button class="btn">Save</button>
   </form>
 
-  <div class="card">
+  <div id="volumes" class="card" {{if .VolumeJobRunning}}hx-get="/apps/{{.App.Name}}" hx-trigger="every 3s" hx-select="#volumes" hx-swap="outerHTML"{{end}}>
     <div>
       <h2 class="h2">Volumes</h2>
       <p class="text-xs text-faint">Directories that survive redeploys, shared by the app and its worker. Everything else in the container is reset on every deploy. Changes apply on the next deploy.</p>
@@ -451,6 +451,39 @@
         <span>Deploy without downtime<br><span class="text-xs text-faint">{{if .App.ShareVolumes}}The new and old version share the volumes for a few seconds during the switch.{{else}}Off: the old version stops before the new one starts (a few seconds of downtime), so two versions never write the same data, e.g. an SQLite database. Turn on if the volumes only hold uploads or cache.{{end}}</span></span>
       </label>
     </form>
+    <div class="border-t border-edge pt-3 space-y-3">
+      <h3 class="text-sm font-medium">Backups</h3>
+      {{if .BackupBucket}}<p class="text-xs text-faint">Backed up daily to R2 (<span class="mono">{{.BackupBucket}}</span>), sealed with the master key, and read back right after upload to prove it's whole. While a volume is copied, the app and its worker are paused, so files written together are copied as of one moment; for most volumes that's seconds. Kept like database backups; none can be deleted in its first 7 days.</p>
+      {{else}}<p class="text-sm text-dim">Backups aren't set up yet: <a href="/settings" class="underline">turn them on in Settings</a>.</p>{{end}}
+      {{range .VolumeBackups}}{{$v := .Volume}}
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm mono font-medium">{{$v}}</span>
+          {{if $.BackupBucket}}<button hx-post="/apps/{{$.App.Name}}/volumes/{{$v}}/backups" class="link" {{if .Job.Running}}disabled{{end}}>Back up now</button>{{end}}
+        </div>
+        {{with .Job}}
+        {{if .Running}}<p class="text-xs text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> {{.Running}}…</p>
+        {{else if .Last}}<p class="text-xs {{if .Failed}}text-bad{{else}}text-faint{{end}}">Last: {{.Last}}</p>{{end}}
+        {{end}}
+        {{$running := .Job.Running}}
+        {{range .Backups}}
+        <div class="flex items-center justify-between gap-3 text-xs">
+          <span class="flex items-center gap-2 min-w-0">
+            <span class="mono truncate" title="{{.ObjectKey}}">{{.CreatedAt}} · {{mb .SizeBytes}}</span>
+            {{if not .VerifiedAt}}<span class="text-faint">not checked</span>
+            {{else if .VerifyError}}<span class="text-bad truncate" title="{{.VerifyError}}">✕ unreadable: {{.VerifyError}}</span>
+            {{else}}<span class="text-good" title="checked {{.VerifiedAt}}">✓ whole · {{.Files}} files</span>{{end}}
+          </span>
+          <span class="flex gap-3 shrink-0">
+            <button hx-post="/apps/{{$.App.Name}}/volumes/{{$v}}/backups/{{.ID}}/verify" class="link" {{if $running}}disabled{{end}}>Check</button>
+            <button hx-post="/apps/{{$.App.Name}}/volumes/{{$v}}/backups/{{.ID}}/restore" hx-confirm="Replace everything in volume {{$v}} with this backup? {{$.App.Name}} stops while it's written; what's in the volume now is lost." class="link" {{if $running}}disabled{{end}}>Restore</button>
+          </span>
+        </div>
+        {{else}}<p class="text-xs text-faint">No backups yet.</p>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
     {{end}}
   </div>
 
@@ -689,10 +722,10 @@
       {{if and (not .BackupBucket) .CloudflareConnected}}<button hx-post="/settings/backups" class="btn-pri">Turn on backups</button>{{end}}
     </div>
     {{if .BackupBucket}}
-    <p class="text-sm text-dim">Every database and the panel itself are backed up daily to the R2 bucket <span class="mono">{{.BackupBucket}}</span> in your Cloudflare account. Its files can't be deleted or overwritten for 7 days, so a bug in hakobu can't wipe recent backups (someone in control of this server could still change the lock).</p>
+    <p class="text-sm text-dim">Every database, every app's volumes and the panel itself are backed up daily to the R2 bucket <span class="mono">{{.BackupBucket}}</span> in your Cloudflare account, sealed with the master key. Its files can't be deleted or overwritten for 7 days, so a bug in hakobu can't wipe recent backups (someone in control of this server could still change the lock).</p>
     <p class="text-sm text-dim">Panel, sealed with the master key: {{if .PanelBackup}}<span class="mono">{{.PanelBackup}}</span>{{else}}first backup within the hour{{end}}. With the master key file (Security, below) and a Cloudflare token, <span class="mono">hakobu restore</span> brings the panel back on a new server.</p>
     {{else}}
-    <p class="text-sm text-dim">Creates a private R2 bucket in your Cloudflare account and backs up every database to it daily. Backups live off this server, so they survive losing it. R2's free plan includes 10 GB.</p>
+    <p class="text-sm text-dim">Creates a private R2 bucket in your Cloudflare account and backs up every database and volume to it daily. Backups live off this server, so they survive losing it. R2's free plan includes 10 GB.</p>
     {{if not .CloudflareConnected}}<p class="text-xs text-faint">Needs Cloudflare connected first: <span class="mono">cd /opt/hakobu && sudo -u hakobu ./hakobu setup</span>.</p>{{end}}
     {{end}}
   </div>
@@ -744,7 +777,7 @@
       <p class="text-sm {{if .KeyDownloaded}}text-dim{{else}}text-bad{{end}}">{{if .KeyDownloaded}}You have a copy of the current master key.{{else}}You have no copy of the current master key: without it the panel's backups can't be restored.{{end}}</p>
       <a href="/settings/master-key" class="btn shrink-0">Download master key</a>
     </div>
-    <p class="text-xs text-faint">Secrets, logs and the apps' errors are encrypted with the master key (<span class="mono">key/master.key</span> on this server), and so are the panel's backups and the database snapshots for Rollback. Downloading it asks you to sign in with GitHub again. Keep the file away from this server, and download it again after replacing all secrets: the old one doesn't open newer backups.</p>
+    <p class="text-xs text-faint">Secrets, logs and the apps' errors are encrypted with the master key (<span class="mono">key/master.key</span> on this server), and so are all backups and the database snapshots for Rollback. Downloading it asks you to sign in with GitHub again. Keep the file away from this server, and download it again after replacing all secrets: the old one doesn't open newer backups.</p>
     {{with .Rotation}}{{if .Started}}
     <div class="space-y-2">
       <p class="text-sm {{if .Running}}text-dim{{else if .Failures}}text-bad{{else}}text-good{{end}}">{{if .Running}}Replacing secrets (started {{.Started}})…{{else if .Failures}}Finished with {{.Failures}} failure(s), started {{.Started}}.{{else}}All replaced, started {{.Started}}.{{end}}</p>

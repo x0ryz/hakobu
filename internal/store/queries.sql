@@ -179,7 +179,7 @@ DELETE FROM storages WHERE name = ?;
 -- Backups
 
 -- name: CreateBackup :one
-INSERT INTO backups (database, object_key, parts, size_bytes, sha256) VALUES (?, ?, ?, ?, ?) RETURNING id;
+INSERT INTO backups (database, object_key, parts, size_bytes, sha256, file_key) VALUES (?, ?, ?, ?, ?, ?) RETURNING id;
 
 -- name: GetBackup :one
 SELECT * FROM backups WHERE id = ?;
@@ -198,6 +198,30 @@ DELETE FROM backups WHERE id = ?;
 
 -- name: DeleteBackupsOf :exec
 DELETE FROM backups WHERE database = ?;
+
+-- name: CreateVolumeBackup :one
+INSERT INTO volume_backups (app_name, volume, object_key, parts, size_bytes, sha256, file_key) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;
+
+-- name: GetVolumeBackup :one
+SELECT * FROM volume_backups WHERE id = ?;
+
+-- name: ListVolumeBackups :many
+SELECT * FROM volume_backups WHERE app_name = ? AND volume = ? ORDER BY id DESC LIMIT ?;
+
+-- name: ListAllVolumeBackups :many
+SELECT * FROM volume_backups WHERE app_name = ? AND volume = ? ORDER BY id DESC;
+
+-- name: SetVolumeBackupVerified :exec
+UPDATE volume_backups SET verified_at = ?, verify_error = ?, files = ? WHERE id = ?;
+
+-- name: DeleteVolumeBackup :exec
+DELETE FROM volume_backups WHERE id = ?;
+
+-- name: DeleteVolumeBackupsOf :exec
+DELETE FROM volume_backups WHERE app_name = ? AND volume = ?;
+
+-- name: DeleteVolumeBackupsOfApp :exec
+DELETE FROM volume_backups WHERE app_name = ?;
 
 -- GitHub App and the owner
 

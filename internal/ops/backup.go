@@ -14,13 +14,15 @@ import (
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
 	"github.com/x0ryz/hakobu/internal/deploy"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
 // Backups go to one R2 bucket in the connected Cloudflare account, written
 // through the REST API with hakobu's Cloudflare API token: no S3 keys exist for it,
 // so nothing an app holds can reach the backups. The bucket's lock keeps
-// every file for backupLockDays, even from hakobu itself.
+// every file for backupLockDays, even from hakobu itself. Every backup is
+// sealed (secret.NewFileWriterKey), so the bucket alone reveals nothing.
 const backupLockDays = 7
 
 // backupPartSize is under cloudflare.MaxObjectSize; tests make it smaller.
@@ -80,17 +82,6 @@ type partsReader struct {
 	open    func(part int) (io.ReadCloser, error)
 	next    int
 	current io.ReadCloser
-}
-
-// backupParts reads a database backup from the backup bucket.
-func backupParts(s *store.Store, b store.Backup) *partsReader {
-	return &partsReader{parts: int(b.Parts), open: func(i int) (io.ReadCloser, error) {
-		c, acc, bucket, err := r2(s) // per part: a long download can outlive a token
-		if err != nil {
-			return nil, err
-		}
-		return c.GetObject(acc, bucket, partKey(b.ObjectKey, i))
-	}}
 }
 
 func (r *partsReader) Read(p []byte) (int, error) {
@@ -246,71 +237,130 @@ func backupAndCheck(s *store.Store, dbName string) error {
 	return nil
 }
 
-// BackupDatabase streams a pg_dump through a temporary file (an upload
-// needs its size up front) to R2, in parts of backupPartSize, and records
-// the dump's SHA-256.
+// BackupDatabase streams a pg_dump, sealed, through a temporary file (an
+// upload needs its size up front) to R2.
 func BackupDatabase(s *store.Store, dbName string) (id int64, err error) {
 	d, err := s.GetDatabase(ctx(), dbName)
 	if err != nil {
 		return 0, err
 	}
-	if _, _, _, err := r2(s); err != nil {
-		return 0, err
-	}
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		return 0, err
-	}
-	f, err := os.CreateTemp(tmpDir, "backup-*.dump")
-	if err != nil {
-		return 0, err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	sum := sha256.New()
-	if err := backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, io.MultiWriter(f, sum)); err != nil {
-		return 0, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	key := fmt.Sprintf("%s/%s.dump", d.Name, time.Now().UTC().Format("20060102-150405"))
-	parts, err := uploadParts(s, key, f, info.Size())
+	key := fmt.Sprintf("%s/%s.dump.enc", d.Name, time.Now().UTC().Format("20060102-150405"))
+	obj, err := uploadSealed(s, key, func(w io.Writer) error {
+		return backup.DumpDatabase(ctx(), PostgresContainer, d.User, d.Name, w)
+	})
 	if err != nil {
 		return 0, err
 	}
 	return s.CreateBackup(ctx(), store.CreateBackupParams{
-		Database: d.Name, ObjectKey: key, Parts: int64(parts), SizeBytes: info.Size(), SHA256: hex.EncodeToString(sum.Sum(nil)),
+		Database: d.Name, ObjectKey: key, Parts: int64(obj.parts), SizeBytes: obj.size, SHA256: obj.sha256, FileKey: secret.String(obj.fileKey),
 	})
 }
 
-// fetchBackup downloads a backup into a temporary file and checks it
-// against the SHA-256 taken when it was made, so a dump changed in the
-// bucket is never restored. The caller closes and removes the file.
-func fetchBackup(s *store.Store, b store.Backup) (*os.File, error) {
+// sealedObject is a backup as uploaded: sealed with a key of its own,
+// which is kept in the database encrypted with the master key, and the
+// SHA-256 of the sealed file.
+type sealedObject struct {
+	parts   int
+	size    int64
+	sha256  string
+	fileKey string
+}
+
+// uploadSealed seals what write produces into a temporary file on the data
+// disk and uploads it as key's parts. A backup in the bucket is no use to
+// whoever gets at the bucket without the master key.
+func uploadSealed(s *store.Store, key string, write func(io.Writer) error) (sealedObject, error) {
+	if _, _, _, err := r2(s); err != nil {
+		return sealedObject{}, err
+	}
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return sealedObject{}, err
+	}
+	f, err := os.CreateTemp(tmpDir, "backup-*.enc")
+	if err != nil {
+		return sealedObject{}, err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	sum := sha256.New()
+	w, fileKey, err := secret.NewFileWriterKey(io.MultiWriter(f, sum))
+	if err != nil {
+		return sealedObject{}, err
+	}
+	if err := write(w); err != nil {
+		return sealedObject{}, err
+	}
+	if err := w.Close(); err != nil {
+		return sealedObject{}, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return sealedObject{}, err
+	}
+	parts, err := uploadParts(s, key, f, info.Size())
+	if err != nil {
+		return sealedObject{}, err
+	}
+	return sealedObject{parts: parts, size: info.Size(), sha256: hex.EncodeToString(sum.Sum(nil)), fileKey: fileKey}, nil
+}
+
+// tempReader is a temporary file read through r (the backup opened),
+// removed on Close.
+type tempReader struct {
+	io.Reader
+	f *os.File
+}
+
+func (t tempReader) Close() error {
+	err := t.f.Close()
+	os.Remove(t.f.Name())
+	return err
+}
+
+// fetchSealed downloads a backup into a temporary file and checks it
+// against the SHA-256 taken when it was made, so a backup changed in the
+// bucket is never restored; it's read through its own key, or as it is
+// for a dump from before backups were sealed (fileKey ""). The caller
+// closes it, which removes the file.
+func fetchSealed(s *store.Store, objectKey string, parts int64, sha, fileKey string) (io.ReadCloser, error) {
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.CreateTemp(tmpDir, "restore-*.dump")
+	f, err := os.CreateTemp(tmpDir, "restore-*")
 	if err != nil {
 		return nil, err
 	}
-	body := backupParts(s, b)
+	body := &partsReader{parts: int(parts), open: func(i int) (io.ReadCloser, error) {
+		c, acc, bucket, err := r2(s) // per part: a long download can outlive a token
+		if err != nil {
+			return nil, err
+		}
+		return c.GetObject(acc, bucket, partKey(objectKey, i))
+	}}
 	defer body.Close()
 	sum := sha256.New()
 	_, err = io.Copy(io.MultiWriter(f, sum), body)
-	if err == nil && hex.EncodeToString(sum.Sum(nil)) != b.SHA256 {
+	if err == nil && hex.EncodeToString(sum.Sum(nil)) != sha {
 		err = fmt.Errorf("the backup in the bucket doesn't match the one hakobu made (SHA-256 differs), not restoring it")
 	}
 	if err == nil {
 		_, err = f.Seek(0, io.SeekStart)
+	}
+	var r io.Reader = f
+	if err == nil && fileKey != "" {
+		r, err = secret.NewFileReaderKey(f, fileKey)
 	}
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		return nil, err
 	}
-	return f, nil
+	return tempReader{r, f}, nil
+}
+
+// fetchBackup is fetchSealed for a database backup.
+func fetchBackup(s *store.Store, b store.Backup) (io.ReadCloser, error) {
+	return fetchSealed(s, b.ObjectKey, b.Parts, b.SHA256, string(b.FileKey))
 }
 
 // uploadParts uploads size bytes of r as key/000, key/001, ...
@@ -362,7 +412,6 @@ func verify(s *store.Store, b store.Backup) (tables int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	defer os.Remove(body.Name())
 	defer body.Close()
 
 	// Database names can't contain dots, so this never clashes with one.
@@ -399,7 +448,6 @@ func restoreBackup(s *store.Store, b store.Backup) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(body.Name())
 	defer body.Close()
 	if err := ensureInPostgres(s, d); err != nil {
 		return err
@@ -418,15 +466,9 @@ func RotateBackups(s *store.Store, dbName string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	for _, b := range backupsToDrop(all, config.BackupKeep, now) {
-		for i := range int(b.Parts) {
-			c, acc, bucket, err := r2(s)
-			if err != nil {
-				return err
-			}
-			if err := c.DeleteObject(acc, bucket, partKey(b.ObjectKey, i)); err != nil {
-				return err // retried by the next rotation
-			}
+	for _, b := range backupsToDrop(all, dbBackupAge, config.BackupKeep, now) {
+		if err := deleteParts(s, b.ObjectKey, b.Parts); err != nil {
+			return err // retried by the next rotation
 		}
 		if err := s.DeleteBackup(ctx(), b.ID); err != nil {
 			return err
@@ -435,37 +477,58 @@ func RotateBackups(s *store.Store, dbName string, now time.Time) error {
 	return nil
 }
 
+// deleteParts deletes a backup's parts from the bucket.
+func deleteParts(s *store.Store, objectKey string, parts int64) error {
+	for i := range int(parts) {
+		c, acc, bucket, err := r2(s)
+		if err != nil {
+			return err
+		}
+		if err := c.DeleteObject(acc, bucket, partKey(objectKey, i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dbBackupAge is what the rotation needs to know of a backup: its ID, when
+// it was made and whether it restored in its check.
+func dbBackupAge(b store.Backup) (id int64, createdAt string, restored bool) {
+	return b.ID, b.CreatedAt, b.VerifiedAt != "" && b.VerifyError == ""
+}
+
 // backupsToDrop picks what the rotation deletes from backups, newest first.
 // Backups still under the bucket's lock can't be deleted, so they're kept.
-func backupsToDrop(backups []store.Backup, keepLast int, now time.Time) []store.Backup {
+func backupsToDrop[B any](backups []B, age func(B) (int64, string, bool), keepLast int, now time.Time) []B {
 	keep := map[int64]bool{}
 	weeks := map[[2]int]bool{}
 	cutoff := now.AddDate(0, 0, -7*keepWeeks)
 	locked := now.AddDate(0, 0, -backupLockDays)
 	verified := false
 	for i, b := range backups {
+		id, createdAt, restored := age(b)
 		if i < keepLast {
-			keep[b.ID] = true
+			keep[id] = true
 		}
-		if !verified && b.VerifiedAt != "" && b.VerifyError == "" {
-			keep[b.ID], verified = true, true
+		if !verified && restored {
+			keep[id], verified = true, true
 		}
-		t, err := time.Parse("2006-01-02T15:04:05Z", b.CreatedAt)
+		t, err := time.Parse("2006-01-02T15:04:05Z", createdAt)
 		if err != nil {
-			keep[b.ID] = true // unknown age: never guess it's old
+			keep[id] = true // unknown age: never guess it's old
 			continue
 		}
 		if t.After(locked) {
-			keep[b.ID] = true
+			keep[id] = true
 		}
 		year, week := t.ISOWeek()
 		if t.After(cutoff) && !weeks[[2]int{year, week}] {
-			keep[b.ID], weeks[[2]int{year, week}] = true, true
+			keep[id], weeks[[2]int{year, week}] = true, true
 		}
 	}
-	var drop []store.Backup
+	var drop []B
 	for _, b := range backups {
-		if !keep[b.ID] {
+		if id, _, _ := age(b); !keep[id] {
 			drop = append(drop, b)
 		}
 	}

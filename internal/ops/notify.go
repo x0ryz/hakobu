@@ -468,6 +468,8 @@ func NoteBackup(s *store.Store, name string, err error) {
 	what, path := "database "+name, "/databases/"+name
 	if name == "panel" {
 		what, path = "the panel", "/settings"
+	} else if app, volume, ok := strings.Cut(name, "/"); ok { // volumeJob
+		what, path = "volume "+volume+" of "+app, "/apps/"+app
 	}
 	key := "backup:" + name
 	if err == nil {

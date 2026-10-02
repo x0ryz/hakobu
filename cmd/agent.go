@@ -184,7 +184,7 @@ func syncBackoff(last time.Duration, err error) time.Duration {
 	return min(max(2*last, time.Minute), time.Hour)
 }
 
-// runBackupScheduler checks hourly for databases and the panel due a
+// runBackupScheduler checks hourly for databases, volumes and the panel due a
 // backup (so restarts don't postpone them) and for what to email the owner
 // about, and cleans up once a day.
 func runBackupScheduler(s *store.Store) {
@@ -194,6 +194,12 @@ func runBackupScheduler(s *store.Store) {
 		for name, err := range ops.BackupDue(s) {
 			if err != nil {
 				fmt.Println("backup failed for", name+":", err)
+			}
+			ops.NoteBackup(s, name, err)
+		}
+		for name, err := range ops.VolumeBackupDue(s) {
+			if err != nil {
+				fmt.Println("backup failed for volume", name+":", err)
 			}
 			ops.NoteBackup(s, name, err)
 		}

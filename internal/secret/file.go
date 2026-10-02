@@ -67,32 +67,44 @@ type sealWriter struct {
 // NewFileWriter seals what's written to it into w; Close writes the last
 // chunk and must be called, or the file reads as cut off.
 func NewFileWriter(w io.Writer) (io.WriteCloser, error) {
+	wc, _, err := NewFileWriterKey(w)
+	return wc, err
+}
+
+// NewFileWriterKey is NewFileWriter that also returns the file's own key,
+// base64-encoded. A sealed file that can't be rewritten when the master key
+// rotates (a backup under the bucket's lock) is opened with that key kept
+// in the database, where it's rotated with the other secrets
+// (NewFileReaderKey); the header still opens it with the master key of the
+// day it was made.
+func NewFileWriterKey(w io.Writer) (io.WriteCloser, string, error) {
 	fileKey := make([]byte, 32)
 	prefix := make([]byte, noncePrefixSize)
 	if _, err := rand.Read(fileKey); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if _, err := rand.Read(prefix); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	wrapped, err := Encrypt(base64.StdEncoding.EncodeToString(fileKey))
+	encoded := base64.StdEncoding.EncodeToString(fileKey)
+	wrapped, err := Encrypt(encoded)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(wrapped) != wrappedKeySize {
-		return nil, fmt.Errorf("secret: wrapped key is %d bytes, want %d", len(wrapped), wrappedKeySize)
+		return nil, "", fmt.Errorf("secret: wrapped key is %d bytes, want %d", len(wrapped), wrappedKeySize)
 	}
 	aead, err := fileAEAD(fileKey)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if _, err := io.WriteString(w, fileMagic+wrapped); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if _, err := w.Write(prefix); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &sealWriter{w: w, aead: aead, prefix: prefix, buf: make([]byte, 0, fileChunk)}, nil
+	return &sealWriter{w: w, aead: aead, prefix: prefix, buf: make([]byte, 0, fileChunk)}, encoded, nil
 }
 
 func (s *sealWriter) Write(p []byte) (int, error) {
@@ -147,6 +159,19 @@ type openReader struct {
 
 // NewFileReader opens a sealed file from r, with any loaded master key.
 func NewFileReader(r io.Reader) (io.Reader, error) {
+	return newFileReader(r, "")
+}
+
+// NewFileReaderKey opens a sealed file from r with its own key from
+// NewFileWriterKey, whatever master key sealed it.
+func NewFileReaderKey(r io.Reader, fileKey string) (io.Reader, error) {
+	if fileKey == "" {
+		return nil, errors.New("secret: no key for the sealed file")
+	}
+	return newFileReader(r, fileKey)
+}
+
+func newFileReader(r io.Reader, encodedKey string) (io.Reader, error) {
 	head := make([]byte, len(fileMagic)+wrappedKeySize+noncePrefixSize)
 	if _, err := io.ReadFull(r, head); err != nil {
 		return nil, errNotSealed
@@ -154,8 +179,14 @@ func NewFileReader(r io.Reader) (io.Reader, error) {
 	if string(head[:len(fileMagic)]) != fileMagic {
 		return nil, errNotSealed
 	}
-	fileKey, err := unwrapFileKey(string(head[len(fileMagic) : len(fileMagic)+wrappedKeySize]))
-	if err != nil {
+	var fileKey []byte
+	var err error
+	if encodedKey != "" {
+		fileKey, err = base64.StdEncoding.DecodeString(encodedKey)
+		if err != nil || len(fileKey) != 32 {
+			return nil, errors.New("secret: corrupt sealed file key")
+		}
+	} else if fileKey, err = unwrapFileKey(string(head[len(fileMagic) : len(fileMagic)+wrappedKeySize])); err != nil {
 		return nil, err
 	}
 	aead, err := fileAEAD(fileKey)

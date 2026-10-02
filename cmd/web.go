@@ -337,7 +337,17 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"SealedProject": ops.SealedKeys(s, "project", app.ProjectName),
 		}
 		data["Sub"], data["Zone"] = splitDomain(app.Domain, data["Zones"].([]string))
-		data["Volumes"], _ = s.ListVolumes(r.Context(), app.Name)
+		vols, _ := s.ListVolumes(r.Context(), app.Name)
+		data["Volumes"] = vols
+		var volBackups []volumeBackups
+		for _, v := range vols {
+			list, _ := s.ListVolumeBackups(r.Context(), store.ListVolumeBackupsParams{AppName: app.Name, Volume: v.Name, Limit: 10})
+			job := ops.VolumeJob(app.Name, v.Name)
+			volBackups = append(volBackups, volumeBackups{Volume: v.Name, Backups: list, Job: job})
+			data["VolumeJobRunning"] = data["VolumeJobRunning"] == true || job.Running != ""
+		}
+		data["VolumeBackups"] = volBackups
+		data["BackupBucket"] = ops.BackupBucket(s)
 		data["LastOOM"] = ops.LastOOM(s, app.Name)
 		data["DataRollbackBlocker"] = ops.DataRollbackBlocker(s, app)
 		if w, err := s.GetWorker(r.Context(), app.Name); err == nil {
@@ -403,6 +413,22 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	action("DELETE /apps/{a}/volumes/{v}", func(r *http.Request) (string, error) {
 		return "", ops.RemoveVolume(s, r.PathValue("a"), r.PathValue("v"))
 	})
+
+	action("POST /apps/{a}/volumes/{v}/backups", func(r *http.Request) (string, error) {
+		return "", ops.StartVolumeBackup(s, r.PathValue("a"), r.PathValue("v"))
+	})
+
+	volumeBackupAction := func(pattern string, start func(*store.Store, string, string, int64) error) {
+		action(pattern, func(r *http.Request) (string, error) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil {
+				return "", fmt.Errorf("no such backup")
+			}
+			return "", start(s, r.PathValue("a"), r.PathValue("v"), id)
+		})
+	}
+	volumeBackupAction("POST /apps/{a}/volumes/{v}/backups/{id}/restore", ops.StartVolumeRestore)
+	volumeBackupAction("POST /apps/{a}/volumes/{v}/backups/{id}/verify", ops.StartVolumeVerify)
 
 	action("POST /apps/{a}/limits", func(r *http.Request) (string, error) {
 		var memory int64
@@ -838,6 +864,13 @@ type appView struct {
 	store.App
 	deploy.State
 	Deploying bool
+}
+
+// volumeBackups is one volume's part of the Backups card on an app's page.
+type volumeBackups struct {
+	Volume  string
+	Backups []store.VolumeBackup
+	Job     ops.DBJob
 }
 
 func newAppView(a store.App) appView {

@@ -9,9 +9,14 @@ hakobu rebuilds and rolls out the new version with zero downtime.
 - **Zero-downtime deploys** with blue/green containers behind an in-process proxy, plus one-click rollback.
   Before each deploy the app's database is snapshotted on the server, so a rollback can also undo a bad migration.
 - **Volumes**: directories that survive redeploys; an app with volumes is restarted on deploy (a few seconds of downtime) unless you let both versions share them.
+  With backups on, each volume is backed up daily to the backup bucket like a database: the app is paused for
+  the seconds tar takes to read it (so an SQLite file and its journal are copied as of one moment), each backup is
+  read back after upload, and one click on the app page puts a backup back.
 - **Resource limits**: memory and CPU caps per app and worker; out-of-memory kills show up on the app page.
 - **Databases** live in one shared Postgres container, each with its own role. Backups are one click in
-  Settings: hakobu creates a private R2 bucket in your Cloudflare account and backs up every database daily.
+  Settings: hakobu creates a private R2 bucket in your Cloudflare account and backs up every database daily,
+  sealed with the master key (each backup with a key of its own, kept in the panel's database, so backups made
+  before **Replace all secrets** still restore).
   No S3 keys exist for it (hakobu writes with its Cloudflare token), and the bucket's lock keeps each backup
   for 7 days even from a bug in hakobu. It doesn't stop someone who has taken over the server: the token
   can change the lock. Each backup's SHA-256 is kept and checked before a restore; each is test-restored
@@ -26,7 +31,7 @@ hakobu rebuilds and rolls out the new version with zero downtime.
   container and sends app traffic straight to the app's container, so restarting or upgrading hakobu doesn't take apps down.
 - **Secrets encrypted at rest**: variables, database passwords, storage keys and tokens, but also build logs, worker
   commands and your apps' errors and logs, are encrypted in the SQLite database with a key in `key/master.key`, kept
-  apart from `data/`; the database snapshots kept for Rollback are sealed with it too. Keep a copy of the key
+  apart from `data/`; the database snapshots kept for Rollback and every backup in R2 are sealed with it too. Keep a copy of the key
   wherever you keep a copy of `data/`: without it nothing secret can be read, and hakobu refuses to start rather than make a new key over data it can't read.
 - **Keeps the disk in check**: each app keeps only its live image and one for rollback; unused build cache is dropped daily.
 - Single Go binary + SQLite. Needs only Docker, which the installer sets up rootless.
@@ -108,8 +113,8 @@ sudo HAKOBU_RESTORE=hakobu-master-key-hakobu.example.com.txt bash install.sh
 
 It asks for a Cloudflare API token that can read R2 (or takes `CLOUDFLARE_API_TOKEN`),
 restores the newest panel backup and starts the panel on its old address, with its tunnel,
-GitHub App, projects and owner. Then redeploy the apps and restore each database from its
-backup page; files in volumes stay with the old server. If the old
+GitHub App, projects and owner. Then restore each database from its backup page and each
+volume from its app's page, and redeploy the apps. If the old
 Cloudflare token was rolled since, run `setup --reconnect` as above.
 
 Hakobu runs as the unprivileged `hakobu` user, and
@@ -177,7 +182,7 @@ sqlc generate
 - `internal/github/` — GitHub App, OAuth
 - `internal/store/` — SQLite: migrations, sqlc queries
 - `internal/secret/` — encryption of secrets in the database
-- `internal/backup/` — streaming pg_dump/restore
+- `internal/backup/` — streaming pg_dump/restore, tar of volumes
 - `internal/s3/` — checking which buckets a storage's keys reach
 
 ## License

@@ -58,6 +58,10 @@ func RemoveVolume(s *store.Store, app, name string) error {
 	if err := s.DeleteVolume(ctx(), store.DeleteVolumeParams{AppName: app, Name: name}); err != nil {
 		return err
 	}
+	// The files stay in the bucket, as a deleted database's do.
+	if err := s.DeleteVolumeBackupsOf(ctx(), store.DeleteVolumeBackupsOfParams{AppName: app, Volume: name}); err != nil {
+		return err
+	}
 	return deploy.RemoveVolume(ctx(), dockerVolume(app, name))
 }
 

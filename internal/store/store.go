@@ -89,6 +89,9 @@ var secretColumns = map[string][]string{
 	"github_app":  {"private_key", "webhook_secret", "client_secret"},
 	"cloudflare":  {"api_token", "tunnel_token"},
 	"sealed_vars": {"value"},
+	// The keys of backups in the bucket (secret.NewFileWriterKey).
+	"backups":        {"file_key"},
+	"volume_backups": {"file_key"},
 	// Apps' errors, logs and traces (they may hold their users' data) and
 	// build output (scripts print secrets now and then).
 	"telemetry_events": {"message", "payload"},
@@ -209,7 +212,9 @@ func (s *Store) DeleteAppCascade(ctx context.Context, name string) error {
 	}
 	defer tx.Rollback()
 	q := s.WithTx(tx)
-	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
+	// Backups of its volumes stay in the bucket, but a new app of the same
+	// name mustn't list (and rotate away) them.
+	for _, del := range []func(context.Context, string) error{q.DeleteWorker, q.DeleteVolumesOfApp, q.DeleteVolumeBackupsOfApp, q.DeleteDeployLogsOfApp, q.DeleteTelemetryOfApp, q.DeleteApp} {
 		if err := del(ctx, name); err != nil {
 			return err
 		}

@@ -145,3 +145,45 @@ func TestSealedFileSurvivesRotation(t *testing.T) {
 		t.Error("a file sealed with the retired key still opened")
 	}
 }
+
+func TestSealedFileOwnKeyOutlivesRotation(t *testing.T) {
+	keyPath := testKey(t)
+	plain := []byte("a backup under the bucket's lock")
+	var buf bytes.Buffer
+	w, fileKey, err := NewFileWriterKey(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sealed := buf.Bytes()
+
+	if err := BeginRotation(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishRotation(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open(sealed); err == nil {
+		t.Error("the header opened with a retired master key")
+	}
+	r, err := NewFileReaderKey(bytes.NewReader(sealed), fileKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("with its own key: %v %q", err, got)
+	}
+	_, wrongKey, _ := NewFileWriterKey(io.Discard)
+	r, err = NewFileReaderKey(bytes.NewReader(sealed), wrongKey)
+	if err == nil {
+		_, err = io.ReadAll(r)
+	}
+	if err == nil {
+		t.Error("opened with another file's key")
+	}
+}

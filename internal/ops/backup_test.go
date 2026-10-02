@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
+	"github.com/x0ryz/hakobu/internal/secret"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -37,7 +38,7 @@ func TestBackupsToDrop(t *testing.T) {
 		backups = append(backups, b)
 	}
 	var kept []int
-	dropped := backupsToDrop(backups, 7, now)
+	dropped := backupsToDrop(backups, dbBackupAge, 7, now)
 	for day, b := range backups {
 		if !slices.ContainsFunc(dropped, func(d store.Backup) bool { return d.ID == b.ID }) {
 			kept = append(kept, day)
@@ -186,11 +187,8 @@ func TestR2Backups(t *testing.T) {
 		t.Fatalf("parts = %d, %v, objects %v", parts, err, objects)
 	}
 	b := store.Backup{ObjectKey: "main/1.sql.gz", Parts: int64(parts)}
-	got, err := io.ReadAll(backupParts(s, b))
-	if err != nil || string(got) != dump {
-		t.Errorf("read back %q, %v", got, err)
-	}
-	// A restore gets the dump only if it's the one hakobu uploaded.
+	// A restore gets the dump only if it's the one hakobu uploaded; one from
+	// before backups were sealed is read as it is.
 	t.Chdir(t.TempDir()) // for tmpDir
 	sum := sha256.Sum256([]byte(dump))
 	b.SHA256 = hex.EncodeToString(sum[:])
@@ -199,7 +197,6 @@ func TestR2Backups(t *testing.T) {
 	} else {
 		got, _ := io.ReadAll(f)
 		f.Close()
-		os.Remove(f.Name())
 		if string(got) != dump {
 			t.Errorf("fetched %q", got)
 		}
@@ -211,7 +208,33 @@ func TestR2Backups(t *testing.T) {
 			f.Close()
 		}
 	}
-	if left, _ := filepath.Glob(filepath.Join(tmpDir, "restore-*")); len(left) != 0 {
+
+	// A sealed backup shows nothing of the dump in the bucket and reads
+	// back with its own key.
+	secretDump := strings.Repeat("password=hunter2 ", 50)
+	obj, err := uploadSealed(s, "other/2.dump.enc", func(w io.Writer) error {
+		_, err := io.WriteString(w, secretDump)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range objects {
+		if strings.HasPrefix(k, "other/2.dump.enc/") && strings.Contains(string(v), "hunter2") {
+			t.Errorf("%s holds the dump in the clear", k)
+		}
+	}
+	sealed := store.Backup{ObjectKey: "other/2.dump.enc", Parts: int64(obj.parts), SHA256: obj.sha256, FileKey: secret.String(obj.fileKey)}
+	if f, err := fetchBackup(s, sealed); err != nil {
+		t.Errorf("fetching a sealed backup: %v", err)
+	} else {
+		got, err := io.ReadAll(f)
+		f.Close()
+		if err != nil || string(got) != secretDump {
+			t.Errorf("sealed backup read back %d bytes, %v", len(got), err)
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmpDir, "*")); len(left) != 0 {
 		t.Errorf("temporary files left: %v", left)
 	}
 	// An empty dump still makes one (empty) part, so it can be read.
