@@ -61,7 +61,7 @@ token (after rolling it, say): `cd /opt/hakobu && sudo -u hakobu ./hakobu setup 
 
 **Settings → Notifications**: enter your address and confirm it from the email
 Cloudflare sends. Hakobu then emails you when a deploy after a push fails, a backup
-fails, an app runs out of memory, the disk is almost full or the master key isn't
+fails, an app crashes or runs out of memory, the disk is almost full or the master key isn't
 downloaded; each problem once, again only if it's still there hours later, and once
 more when it's gone. It goes through Cloudflare Email Service, free for a confirmed
 address, from `alerts@<panel address>` (the name before the @ can be changed). Cloudflare sends from any address of a domain

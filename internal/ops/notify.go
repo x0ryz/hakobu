@@ -15,8 +15,8 @@ import (
 )
 
 // The owner gets an email when something needs them: a deploy after a push
-// failed, a backup failed, an app ran out of memory, the disk is filling
-// up. It goes through Cloudflare Email Service to an address the owner
+// failed, a backup failed, an app crashed or ran out of memory, the disk
+// is filling up. It goes through Cloudflare Email Service to an address the owner
 // confirmed, which is free, from alerts@<panel host> (the name before the @
 // can be changed). Cloudflare sends
 // from any name in a zone with Email Routing enabled; where it isn't,
@@ -486,6 +486,13 @@ func NoteBackup(s *store.Store, name string, err error) {
 func noteOOM(s *store.Store, app, message string) {
 	problem(s, "oom:"+app, notifyAgain, app+": out of memory",
 		message+"\n\nGive it more memory or find what grows: "+panelURL("/apps/"+app+"#errors"))
+}
+
+// noteCrash mails a live app or worker container that exited with an
+// error; Docker restarting it again and again stays one email.
+func noteCrash(s *store.Store, app, message string) {
+	problem(s, "crash:"+app, notifyAgain, app+": crashed",
+		message+"\n\nIts output: "+panelURL("/apps/"+app+"#output"))
 }
 
 // CheckForOwner mails the disk filling up and a master key the owner

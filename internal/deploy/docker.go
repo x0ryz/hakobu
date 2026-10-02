@@ -729,16 +729,22 @@ func ContainerStatus(ctx context.Context, containerName string) (status string, 
 	return st.Status, st.Restarts
 }
 
-// WatchOOM calls fn for every container the kernel kills for running out of
-// memory, until ctx ends or the event stream breaks. app is the container's
-// AppLabel, "" for services such as Postgres.
-//
-// Docker doesn't always notice: under rootless Docker a main process the
-// kernel kills often exits with no "oom" event. So a container that dies
-// from SIGKILL (exit 137) Docker didn't send (no "kill" event since it
-// started) is reported too, with sure=false: the kernel's OOM killer is
-// almost always what sends it.
-func WatchOOM(ctx context.Context, fn func(container, app string, sure bool)) error {
+// Death is why a container stopped by itself, Docker sent it no signal.
+type Death struct {
+	OOM bool // the kernel killed it for running out of memory
+	// Sure, for OOM: Docker's "oom" event said so. Under rootless Docker a
+	// main process the kernel kills often exits with no "oom" event, so a
+	// SIGKILL death (exit 137) Docker didn't send counts too: the kernel's
+	// OOM killer is almost always what sends it.
+	Sure     bool
+	ExitCode string // otherwise: it exited with this code, never "0"
+}
+
+// WatchDeaths calls fn for every container that runs out of memory or exits
+// with an error by itself (a stop or kill through Docker isn't one), until
+// ctx ends or the event stream breaks. app is the container's AppLabel, ""
+// for services such as Postgres.
+func WatchDeaths(ctx context.Context, fn func(container, app string, d Death)) error {
 	filters, _ := json.Marshal(map[string][]string{"type": {"container"}, "event": {"oom", "kill", "die", "start"}})
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/events?filters="+url.QueryEscape(string(filters)), nil)
 	if err != nil {
@@ -786,19 +792,24 @@ func WatchOOM(ctx context.Context, fn func(container, app string, sure bool)) er
 			if !oomSeen[id] {
 				oomSeen[id] = true
 				delete(pending, id)
-				fn(name, app, true)
+				fn(name, app, Death{OOM: true, Sure: true})
 			}
 		case "die":
-			if attrs["exitCode"] == "137" && !killed[id] && !oomSeen[id] {
+			code := attrs["exitCode"]
+			switch {
+			case killed[id] || oomSeen[id] || code == "0" || code == "":
+			case code == "137":
 				pending[id] = true
 				time.AfterFunc(oomEventGrace, func() {
 					mu.Lock()
 					defer mu.Unlock()
 					if pending[id] {
 						delete(pending, id)
-						fn(name, app, false)
+						fn(name, app, Death{OOM: true})
 					}
 				})
+			default:
+				fn(name, app, Death{ExitCode: code})
 			}
 			delete(killed, id)
 		}

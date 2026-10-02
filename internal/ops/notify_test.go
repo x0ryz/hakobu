@@ -15,6 +15,7 @@ import (
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
 	"github.com/x0ryz/hakobu/internal/config"
+	"github.com/x0ryz/hakobu/internal/deploy"
 	"github.com/x0ryz/hakobu/internal/store"
 )
 
@@ -310,5 +311,44 @@ func TestProblemsAreMailedOnce(t *testing.T) {
 	}
 	if got := f.sent(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("sent\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+func TestCrashesOfLiveContainers(t *testing.T) {
+	f := newFakeEmail(t)
+	s := notifyStore(t)
+	if err := SetupNotifications(s, "me@example.org", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateProject(ctx(), "shop"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.GetProject(ctx(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateApp(ctx(), store.CreateAppParams{ProjectID: p.ID, Name: "web", BuildStrategy: "dockerfile"}); err != nil {
+		t.Fatal(err)
+	}
+	app, err := s.GetApp(ctx(), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := "web-green"
+	if app.ActiveSlot == "green" {
+		candidate = "web-blue"
+	}
+
+	recordDeath(s, candidate, "web", deploy.Death{ExitCode: "1"}) // its deploy says so
+	recordDeath(s, "postgres", "", deploy.Death{ExitCode: "1"})   // not an app's
+	recordDeath(s, "web-"+app.ActiveSlot, "web", deploy.Death{ExitCode: "1"})
+	recordDeath(s, "web-"+app.ActiveSlot, "web", deploy.Death{ExitCode: "1"}) // restarted, crashed again
+	recordDeath(s, "web-worker", "web", deploy.Death{OOM: true})
+
+	if at, _ := s.LastTelemetryOfKind(ctx(), store.LastTelemetryOfKindParams{AppName: "web", Kind: "crash"}); at == "" {
+		t.Error("the crash isn't in the Errors tab")
+	}
+	if got, want := f.sent(), []string{"web: crashed", "web: out of memory"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("sent %q, want %q", got, want)
 	}
 }

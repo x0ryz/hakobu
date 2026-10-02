@@ -33,34 +33,49 @@ func oomText(app store.App) string {
 	return "the server ran out of memory"
 }
 
-// WatchOOM records every out-of-memory kill of an app or worker container
-// in the app's Errors tab, reconnecting to Docker whenever the stream breaks.
-func WatchOOM(s *store.Store) {
+// WatchDeaths records every out-of-memory kill of an app or worker
+// container, and every crash of a live one, in the app's Errors tab and
+// emails the owner, reconnecting to Docker whenever the stream breaks.
+func WatchDeaths(s *store.Store) {
 	for {
-		err := deploy.WatchOOM(context.Background(), func(container, appName string, sure bool) {
-			app, err := s.GetApp(ctx(), appName)
-			if err != nil {
-				if sure {
-					fmt.Println(container, "was killed: out of memory")
-				} else {
-					fmt.Println(container, "was killed (exit 137), most likely out of memory")
-				}
-				return
-			}
-			reason := "was killed: " + oomText(app)
-			if !sure {
-				reason = "was killed (exit 137), most likely because " + oomText(app)
-			}
-			message := fmt.Sprintf("%s %s. Docker restarts it.", container, reason)
-			if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
-				AppName: app.Name, Kind: "oom", Level: "fatal", Message: secret.String(message),
-			}); err != nil {
-				fmt.Println("failed to record an out-of-memory kill of", container+":", err)
-			}
-			noteOOM(s, app.Name, message)
-		})
+		err := deploy.WatchDeaths(context.Background(), func(container, app string, d deploy.Death) { recordDeath(s, container, app, d) })
 		fmt.Println("docker events:", err)
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// recordDeath puts an out-of-memory kill of an app or worker container, or
+// a crash of a live one, in the app's Errors tab and emails the owner.
+func recordDeath(s *store.Store, container, appName string, d deploy.Death) {
+	app, err := s.GetApp(ctx(), appName)
+	if err != nil {
+		if d.OOM {
+			fmt.Println(container, "was killed, most likely out of memory")
+		}
+		return
+	}
+	var kind, message string
+	switch {
+	case d.OOM && d.Sure:
+		kind, message = "oom", fmt.Sprintf("%s was killed: %s. Docker restarts it.", container, oomText(app))
+	case d.OOM:
+		kind, message = "oom", fmt.Sprintf("%s was killed (exit 137), most likely because %s. Docker restarts it.", container, oomText(app))
+	case container == app.Name+"-"+app.ActiveSlot || container == app.Name+"-worker":
+		// A candidate that crashes while starting fails its deploy,
+		// which says so itself.
+		kind, message = "crash", fmt.Sprintf("%s exited with code %s. Docker restarts it; its output says why.", container, d.ExitCode)
+	default:
+		return
+	}
+	if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
+		AppName: app.Name, Kind: kind, Level: "fatal", Message: secret.String(message),
+	}); err != nil {
+		fmt.Println("failed to record that", container, "stopped:", err)
+	}
+	if kind == "oom" {
+		noteOOM(s, app.Name, message)
+	} else {
+		noteCrash(s, app.Name, message)
 	}
 }
 

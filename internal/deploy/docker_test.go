@@ -10,15 +10,24 @@ import (
 )
 
 // HAKOBU_DOCKER_TEST=1 go test ./internal/deploy -run Docker -v
-func TestDockerWatchOOM(t *testing.T) {
+func TestDockerWatchDeaths(t *testing.T) {
 	if os.Getenv("HAKOBU_DOCKER_TEST") == "" {
 		t.Skip("set HAKOBU_DOCKER_TEST=1 to run against the local Docker")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	got := make(chan [2]string, 4)
-	go func() { _ = WatchOOM(ctx, func(container, app string, _ bool) { got <- [2]string{container, app} }) }() // ends with ctx
-	time.Sleep(time.Second)                                                                                     // let the event stream connect
+	go func() { // ends with ctx
+		_ = WatchDeaths(ctx, func(container, app string, d Death) {
+			if d.OOM {
+				app += " oom"
+			} else {
+				app += " exit " + d.ExitCode
+			}
+			got <- [2]string{container, app}
+		})
+	}()
+	time.Sleep(time.Second) // let the event stream connect
 
 	// Docker's own SIGKILL (docker kill, a stop that timed out) isn't one.
 	_ = exec.Command("docker", "rm", "-f", "zt-killed").Run()
@@ -39,7 +48,7 @@ func TestDockerWatchOOM(t *testing.T) {
 	}
 	select {
 	case ev := <-got:
-		if ev != [2]string{"zt-oom", "zt-app"} {
+		if ev != [2]string{"zt-oom", "zt-app oom"} {
 			t.Errorf("event = %v", ev)
 		}
 	case <-ctx.Done():
@@ -48,6 +57,21 @@ func TestDockerWatchOOM(t *testing.T) {
 	time.Sleep(2 * oomEventGrace) // a double report would come by now
 	if len(got) > 0 {
 		t.Errorf("reported more than once: %v", <-got)
+	}
+
+	// A crash is reported with its exit code, a clean exit isn't.
+	for _, code := range []string{"0", "3"} {
+		if out, err := exec.Command("docker", "run", "--rm", "--label", AppLabel+"=zt-app", "--name", "zt-exit-"+code, "busybox:1.36", "sh", "-c", "exit "+code).CombinedOutput(); err != nil && code == "0" {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	select {
+	case ev := <-got:
+		if ev != [2]string{"zt-exit-3", "zt-app exit 3"} {
+			t.Errorf("event = %v", ev)
+		}
+	case <-ctx.Done():
+		t.Fatal("no crash event")
 	}
 }
 
