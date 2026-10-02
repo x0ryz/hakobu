@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -62,7 +63,9 @@ func Notifications(s *store.Store) NotifyInfo {
 	}
 	c, cf, err := cfClient(s)
 	if err == nil {
-		_, info.Verified, err = c.Destination(cf.AccountID, n.Email)
+		var d cloudflare.Destination
+		d, err = c.Destination(cf.AccountID, n.Email)
+		info.Verified = d.Verified
 	}
 	if err != nil {
 		info.Err = tokenHint(err).Error()
@@ -72,9 +75,78 @@ func Notifications(s *store.Store) NotifyInfo {
 	return info
 }
 
+// NotifyChoice is an address or a domain to offer in Settings.
+type NotifyChoice struct {
+	Value, Note string
+	Selected    bool
+}
+
+// NotifyChoices are the addresses to send to that need no confirming or
+// are the owner's on GitHub, and the domains that can send.
+func NotifyChoices(s *store.Store) (to, from []NotifyChoice, err error) {
+	c, cf, err := cfClient(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	current, _ := s.GetNotify(ctx())
+	dests, err := c.Destinations(cf.AccountID)
+	if err != nil {
+		return nil, nil, tokenHint(err)
+	}
+	github := ""
+	if o, err := s.GetOwner(ctx()); err == nil {
+		github = o.GitHubEmail
+	}
+	for _, d := range dests {
+		if !d.Verified {
+			continue
+		}
+		note := "confirmed in Cloudflare"
+		if strings.EqualFold(d.Email, github) {
+			note, github = "your GitHub email, confirmed in Cloudflare", ""
+		}
+		to = append(to, NotifyChoice{Value: d.Email, Note: note, Selected: strings.EqualFold(d.Email, current.Email)})
+	}
+	if github != "" {
+		to = append(to, NotifyChoice{Value: github, Note: "your GitHub email, Cloudflare asks to confirm it", Selected: strings.EqualFold(github, current.Email)})
+	}
+
+	zones, err := c.Zones()
+	if err != nil {
+		return nil, nil, err
+	}
+	host := config.PublicHost()
+	if zone, ok := cloudflare.ZoneFor(zones, host); ok {
+		from = append(from, NotifyChoice{Value: "mail." + host, Note: "set up by hakobu, your domain's mail isn't touched"})
+		zones = append([]cloudflare.Zone{zone}, zones...) // the panel's first
+	}
+	seen := map[string]bool{"mail." + host: true}
+	for _, z := range zones {
+		r, err := c.EmailRouting(z.ID)
+		if err != nil {
+			return nil, nil, tokenHint(err)
+		}
+		names := r.Subdomains
+		if r.ApexReady {
+			names = append([]string{z.Name}, names...)
+		}
+		for _, n := range names {
+			if !seen[n] {
+				seen[n] = true
+				from = append(from, NotifyChoice{Value: n, Note: "Email Routing is on"})
+			}
+		}
+	}
+	for i := range from {
+		from[i].Selected = from[i].Value == current.SenderDomain
+	}
+	return to, from, nil
+}
+
 // SetupNotifications sends emails to email from now on, from the domain
 // from if given (one of the account's), and asks Cloudflare to have the
-// address confirmed.
+// address confirmed. What hakobu set up for an earlier address or domain
+// and no longer needs is removed.
 func SetupNotifications(s *store.Store, email, from string) error {
 	addr, err := mail.ParseAddress(strings.TrimSpace(email))
 	if err != nil || addr.Name != "" {
@@ -91,41 +163,130 @@ func SetupNotifications(s *store.Store, email, from string) error {
 	if err != nil {
 		return err
 	}
-	sender, err := senderDomain(c, zones, strings.Trim(strings.ToLower(strings.TrimSpace(from)), "."))
+	sender, zone, routed, err := senderDomain(c, zones, strings.Trim(strings.ToLower(strings.TrimSpace(from)), "."))
 	if err != nil {
 		return tokenHint(err)
 	}
-	if err := c.AddDestination(cf.AccountID, addr.Address); err != nil {
+	added, err := c.AddDestination(cf.AccountID, addr.Address)
+	if err != nil {
 		return tokenHint(err)
 	}
-	return s.SaveNotify(ctx(), store.SaveNotifyParams{Email: addr.Address, SenderDomain: sender})
+	n := store.SaveNotifyParams{Email: addr.Address, SenderDomain: sender, ZoneID: zone.ID, RoutedDomain: routed}
+	prev, prevErr := s.GetNotify(ctx())
+	hadPrev := prevErr == nil
+	if hadPrev { // what hakobu set up before and still uses stays its to undo
+		added = added || (prev.AddedAddress == 1 && strings.EqualFold(prev.Email, addr.Address))
+		if prev.RoutedDomain == sender {
+			n.RoutedDomain, n.ZoneID = sender, prev.ZoneID
+		}
+	}
+	if added {
+		n.AddedAddress = 1
+	}
+	if err := s.SaveNotify(ctx(), n); err != nil {
+		return err
+	}
+	if hadPrev {
+		return undoNotify(c, cf.AccountID, prev, addr.Address, sender)
+	}
+	return nil
 }
 
 // senderDomain picks the domain to send from, turning Email Routing on for
-// it if needed. It never turns it on for a zone's apex: that replaces the
-// domain's MX records, and with them its mail.
-func senderDomain(c cloudflare.Client, zones []cloudflare.Zone, from string) (string, error) {
+// it if needed, and returns it with its zone and, if hakobu turned it on,
+// the domain again. It never turns it on for a zone's apex: that replaces
+// the domain's MX records, and with them its mail.
+func senderDomain(c cloudflare.Client, zones []cloudflare.Zone, from string) (sender string, zone cloudflare.Zone, routed string, err error) {
 	host := from
 	if host == "" {
 		host = config.PublicHost()
 	}
 	zone, ok := cloudflare.ZoneFor(zones, host)
 	if !ok {
-		return "", fmt.Errorf("%s is not in a domain of your Cloudflare account", host)
+		return "", zone, "", fmt.Errorf("%s is not in a domain of your Cloudflare account", host)
 	}
-	apexOn, err := c.EmailRouting(zone.ID)
+	r, err := c.EmailRouting(zone.ID)
 	if err != nil {
-		return "", err
+		return "", zone, "", err
 	}
 	switch {
-	case from == zone.Name && !apexOn:
-		return "", fmt.Errorf("Email Routing is off for %s; turning it on would replace the domain's MX records, so hakobu doesn't. Turn it on in Cloudflare, or send from a subdomain", from)
-	case from == zone.Name || (from == "" && apexOn):
-		return zone.Name, nil
+	case from == "" && r.ApexReady, from == zone.Name && r.ApexReady:
+		return zone.Name, zone, "", nil
+	case from == zone.Name:
+		return "", zone, "", fmt.Errorf("Email Routing is off for %s; turning it on would replace the domain's MX records, so hakobu doesn't. Turn it on in Cloudflare, or send from a subdomain", from)
 	case from == "":
 		from = "mail." + host
 	}
-	return from, c.EnableEmailRouting(zone.ID, from)
+	if slices.Contains(r.Subdomains, from) {
+		return from, zone, "", nil
+	}
+	if err := enableRouting(c, zone, from); err != nil {
+		return "", zone, "", err
+	}
+	return from, zone, from, nil
+}
+
+// enableRouting turns Email Routing on for a subdomain. Cloudflare then
+// also writes an SPF record at the apex that allows only its own servers,
+// which would fail the domain's own mail sent elsewhere; that's put back
+// as it was.
+func enableRouting(c cloudflare.Client, zone cloudflare.Zone, name string) error {
+	before, err := c.SPFRecords(zone.ID, zone.Name)
+	if err != nil {
+		return err
+	}
+	if err := c.EnableEmailRouting(zone.ID, name); err != nil {
+		return err
+	}
+	after, err := c.SPFRecords(zone.ID, zone.Name)
+	if err != nil {
+		return err
+	}
+	for id, content := range after {
+		was, existed := before[id]
+		switch {
+		case !existed:
+			err = c.DeleteRecord(zone.ID, id)
+		case was != content:
+			err = c.SetTXT(zone.ID, id, was)
+		}
+		if err != nil {
+			return fmt.Errorf("putting back the SPF record of %s: %w", zone.Name, err)
+		}
+	}
+	return nil
+}
+
+// undoNotify removes from Cloudflare what hakobu set up for n, except the
+// address and domain still in use.
+func undoNotify(c cloudflare.Client, accountID string, n store.Notify, keepEmail, keepDomain string) error {
+	var errs []error
+	if n.AddedAddress == 1 && !strings.EqualFold(n.Email, keepEmail) {
+		if err := c.DeleteDestination(accountID, n.Email); err != nil {
+			errs = append(errs, fmt.Errorf("removing %s from Cloudflare's addresses: %w", n.Email, err))
+		}
+		confirmed.Delete(n.Email)
+	}
+	if n.RoutedDomain != "" && n.RoutedDomain != keepDomain {
+		err := c.DisableEmailRouting(n.ZoneID, n.RoutedDomain)
+		if err == nil {
+			var spf map[string]string
+			if spf, err = c.SPFRecords(n.ZoneID, n.RoutedDomain); err == nil {
+				for id := range spf {
+					if err = c.DeleteRecord(n.ZoneID, id); err != nil {
+						break
+					}
+				}
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("turning Email Routing off for %s: %w", n.RoutedDomain, err))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return tokenHint(err)
+	}
+	return nil
 }
 
 // tokenHint explains a refusal by Cloudflare that's down to a token made
@@ -141,10 +302,25 @@ func tokenHint(err error) error {
 	return err
 }
 
-// TurnOffNotifications stops the emails. The address stays confirmed in
-// Cloudflare, and Email Routing on, for turning them on again.
+// TurnOffNotifications stops the emails and removes from Cloudflare what
+// hakobu set up for them: the address, if hakobu added it, and Email
+// Routing for the domain hakobu turned it on for.
 func TurnOffNotifications(s *store.Store) error {
-	return s.DeleteNotify(ctx())
+	n, err := s.GetNotify(ctx())
+	if err != nil {
+		return nil
+	}
+	if err := s.DeleteNotify(ctx()); err != nil {
+		return err
+	}
+	c, cf, err := cfClient(s)
+	if err == nil {
+		err = undoNotify(c, cf.AccountID, n, "", "")
+	}
+	if err != nil {
+		return fmt.Errorf("emails are off, but cleaning up in Cloudflare failed (remove it there by hand): %w", err)
+	}
+	return nil
 }
 
 // SendTestEmail sends an email right away.

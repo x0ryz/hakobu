@@ -596,6 +596,34 @@
 </div>
 {{template "foot"}}{{end}}
 
+{{define "notify-form"}}
+<div class="space-y-2">
+  {{if .Error}}<p class="text-sm text-bad">{{.Error}}</p>{{end}}
+  <form hx-post="/settings/notify" x-data="{other: {{if .OtherValue}}true{{else if .To}}false{{else}}true{{end}}}" class="space-y-2">
+    <div class="grid gap-2 sm:grid-cols-2">
+      <div>
+        <label class="label">Send to</label>
+        <select name="email" class="input w-full" @change="other = $event.target.value === ''">
+          {{range .To}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Value}} · {{.Note}}</option>{{end}}
+          <option value="" {{if .OtherValue}}selected{{end}}>Another address…</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Send from</label>
+        <select name="from" class="input w-full">
+          {{range .From}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>hakobu@{{.Value}} · {{.Note}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <div x-show="other" {{if not (or .OtherValue (not .To))}}x-cloak{{end}}>
+      <input name="other" type="email" placeholder="you@example.com" value="{{.OtherValue}}" class="input w-full">
+    </div>
+    <button class="btn-pri">{{if .Notify.On}}Change{{else}}Turn on{{end}}</button>
+  </form>
+  <p class="text-xs text-faint">Sent through Cloudflare Email Service, free for an address confirmed in your Cloudflare account; a new one gets a link to confirm. <span class="mono">mail.{{.PublicHost}}</span> is set up by hakobu for this alone, so your domain's own mail isn't touched; Turn off removes what hakobu set up.</p>
+</div>
+{{end}}
+
 {{define "settings"}}{{template "head" "Settings"}}{{template "nav"}}
 <h1 class="text-xl font-semibold mb-6">Settings</h1>
 <div class="space-y-6">
@@ -624,7 +652,7 @@
       <h2 class="h2">Notifications</h2>
       {{if .Notify.On}}<div class="flex gap-2 shrink-0">
         <button hx-post="/settings/notify/test" class="btn" {{if not .Notify.Verified}}disabled{{end}}>Send test email</button>
-        <button hx-delete="/settings/notify" class="btn">Turn off</button>
+        <button hx-delete="/settings/notify" hx-confirm="Turn the emails off? hakobu also removes from Cloudflare what it set up for them: the address, if it added it, and Email Routing for its mail subdomain." class="btn">Turn off</button>
       </div>{{end}}
     </div>
     {{with .Notify}}{{if .On}}
@@ -634,12 +662,7 @@
     {{end}}{{end}}
     <p class="text-sm text-dim">An email when something needs you: a deploy after a push failed, a backup failed, an app ran out of memory, the disk is almost full, the master key isn't downloaded. Each problem is mailed once, again only if it's still there hours later, and once more when it's gone.</p>
     {{if .CloudflareConnected}}
-    <form hx-post="/settings/notify" class="flex flex-wrap gap-2">
-      <input name="email" type="email" required placeholder="you@example.com" value="{{.Notify.Email}}" class="input flex-1 min-w-48">
-      <input name="from" placeholder="send from (optional), e.g. example.com" class="input flex-1 min-w-48">
-      <button class="btn-pri">{{if .Notify.On}}Change{{else}}Turn on{{end}}</button>
-    </form>
-    <p class="text-xs text-faint">Sent through Cloudflare Email Service, free for an address you confirm. From your domain if Email Routing is already on there, otherwise from <span class="mono">mail.{{.PublicHost}}</span>: hakobu turns it on for that subdomain only, so your domain's own mail isn't touched.</p>
+    <div hx-get="/settings/notify/form" hx-trigger="load" hx-swap="outerHTML"><p class="text-xs text-faint">Loading addresses…</p></div>
     {{else}}<p class="text-xs text-faint">Needs Cloudflare connected first.</p>{{end}}
   </div>
 

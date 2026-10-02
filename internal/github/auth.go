@@ -208,7 +208,7 @@ func BuildManifest(publicHost string) ([]byte, error) {
 		"redirect_url":        base + "/github-app/callback",
 		"callback_urls":       []string{base + "/auth/callback"},
 		"public":              false,
-		"default_permissions": map[string]string{"contents": "read", "metadata": "read"},
+		"default_permissions": map[string]string{"contents": "read", "metadata": "read", "email_addresses": "read"},
 		"default_events":      []string{"push"},
 	})
 }
@@ -249,6 +249,7 @@ func AuthorizeURL(clientID, redirectURI, state string, pickAccount bool) string 
 type User struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
+	Email string `json:"email"` // primary and verified, or the public one; may be ""
 }
 
 // SignIn exchanges an OAuth callback code for the signed-in user.
@@ -288,6 +289,19 @@ func SignIn(clientID, clientSecret, code, redirectURI string) (User, error) {
 	}
 	if user.ID == 0 {
 		return User{}, fmt.Errorf("github returned no user ID")
+	}
+	// The primary address, if the App may read the user's addresses (Apps
+	// registered before it asked can't); otherwise the public one stays.
+	var emails []struct {
+		Email             string `json:"email"`
+		Primary, Verified bool
+	}
+	if call("GET", "https://api.github.com/user/emails", tok.AccessToken, nil, http.StatusOK, &emails) == nil {
+		for _, e := range emails {
+			if e.Primary && e.Verified {
+				user.Email = e.Email
+			}
+		}
 	}
 	return user, nil
 }

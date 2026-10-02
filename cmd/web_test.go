@@ -61,6 +61,15 @@ func TestTemplatesRender(t *testing.T) {
 	if err := templates.ExecuteTemplate(io.Discard, "new-app", map[string]any{"Project": "demo", "RepoError": "x"}); err != nil {
 		t.Errorf("new-app without apps domain: %v", err)
 	}
+	for _, data := range []map[string]any{
+		{"PublicHost": "p", "Notify": ops.NotifyInfo{On: true}, "To": []ops.NotifyChoice{{Value: "a@b.c", Note: "n", Selected: true}},
+			"From": []ops.NotifyChoice{{Value: "mail.p", Note: "n"}}},
+		{"PublicHost": "p", "Error": "boom", "OtherValue": "x@y.z"},
+	} {
+		if err := templates.ExecuteTemplate(io.Discard, "notify-form", data); err != nil {
+			t.Errorf("notify-form: %v", err)
+		}
+	}
 	if err := templates.ExecuteTemplate(io.Discard, "presets", map[string]any{"Error": "boom"}); err != nil {
 		t.Errorf("presets error: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -572,7 +573,23 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	})
 
 	action("POST /settings/notify", func(r *http.Request) (string, error) {
-		return "", ops.SetupNotifications(s, r.FormValue("email"), r.FormValue("from"))
+		email := r.FormValue("email")
+		if email == "" {
+			email = r.FormValue("other")
+		}
+		return "", ops.SetupNotifications(s, email, r.FormValue("from"))
+	})
+	handle("GET /settings/notify/form", func(w http.ResponseWriter, r *http.Request) {
+		to, from, err := ops.NotifyChoices(s)
+		n := ops.Notifications(s)
+		data := map[string]any{"To": to, "From": from, "PublicHost": config.PublicHost(), "Notify": n}
+		if n.On && !slices.ContainsFunc(to, func(c ops.NotifyChoice) bool { return c.Selected }) {
+			data["OtherValue"] = n.Email // not confirmed yet: it's no choice of its own
+		}
+		if err != nil {
+			data["Error"] = err.Error()
+		}
+		render(w, "notify-form", data)
 	})
 	action("POST /settings/notify/test", func(r *http.Request) (string, error) {
 		return "", ops.SendTestEmail(s)
@@ -745,6 +762,11 @@ func registerAuthRoutes(mux *http.ServeMux, s *store.Store) {
 		if !mayAccess(r.Context(), s, user.ID) {
 			deny("GitHub account " + user.Login + " has no access to this panel")
 			return
+		}
+		if user.Email != "" { // offered for notifications
+			if err := s.SetOwnerEmail(r.Context(), user.Email); err != nil {
+				fmt.Println("failed to note the owner's email:", err)
+			}
 		}
 
 		id, err := ops.RandomHex(32)

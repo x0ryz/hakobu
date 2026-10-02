@@ -115,12 +115,16 @@ type Notify struct {
 	ID           int64
 	Email        string
 	SenderDomain string
+	ZoneID       string
+	AddedAddress int64
+	RoutedDomain string
 }
 
 type Owner struct {
 	ID          int64
 	GitHubID    int64
 	GitHubLogin string
+	GitHubEmail string
 }
 
 type Project struct {

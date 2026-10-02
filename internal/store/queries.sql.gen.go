@@ -629,30 +629,38 @@ func (q *Queries) GetGitHubApp(ctx context.Context) (GitHubApp, error) {
 
 const getNotify = `-- name: GetNotify :one
 
-SELECT id, email, sender_domain FROM notify WHERE id = 1
+SELECT id, email, sender_domain, zone_id, added_address, routed_domain FROM notify WHERE id = 1
 `
 
 // Notifications
 func (q *Queries) GetNotify(ctx context.Context) (Notify, error) {
 	row := q.db.QueryRowContext(ctx, getNotify)
 	var i Notify
-	err := row.Scan(&i.ID, &i.Email, &i.SenderDomain)
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.SenderDomain,
+		&i.ZoneID,
+		&i.AddedAddress,
+		&i.RoutedDomain,
+	)
 	return i, err
 }
 
 const getOwner = `-- name: GetOwner :one
-SELECT github_id, github_login FROM owner WHERE id = 1
+SELECT github_id, github_login, github_email FROM owner WHERE id = 1
 `
 
 type GetOwnerRow struct {
 	GitHubID    int64
 	GitHubLogin string
+	GitHubEmail string
 }
 
 func (q *Queries) GetOwner(ctx context.Context) (GetOwnerRow, error) {
 	row := q.db.QueryRowContext(ctx, getOwner)
 	var i GetOwnerRow
-	err := row.Scan(&i.GitHubID, &i.GitHubLogin)
+	err := row.Scan(&i.GitHubID, &i.GitHubLogin, &i.GitHubEmail)
 	return i, err
 }
 
@@ -1463,17 +1471,27 @@ func (q *Queries) SaveGitHubApp(ctx context.Context, arg SaveGitHubAppParams) er
 }
 
 const saveNotify = `-- name: SaveNotify :exec
-INSERT INTO notify (id, email, sender_domain) VALUES (1, ?, ?)
-ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain
+INSERT INTO notify (id, email, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain,
+	zone_id = excluded.zone_id, added_address = excluded.added_address, routed_domain = excluded.routed_domain
 `
 
 type SaveNotifyParams struct {
 	Email        string
 	SenderDomain string
+	ZoneID       string
+	AddedAddress int64
+	RoutedDomain string
 }
 
 func (q *Queries) SaveNotify(ctx context.Context, arg SaveNotifyParams) error {
-	_, err := q.db.ExecContext(ctx, saveNotify, arg.Email, arg.SenderDomain)
+	_, err := q.db.ExecContext(ctx, saveNotify,
+		arg.Email,
+		arg.SenderDomain,
+		arg.ZoneID,
+		arg.AddedAddress,
+		arg.RoutedDomain,
+	)
 	return err
 }
 
@@ -1731,6 +1749,15 @@ type SetOwnerParams struct {
 
 func (q *Queries) SetOwner(ctx context.Context, arg SetOwnerParams) error {
 	_, err := q.db.ExecContext(ctx, setOwner, arg.GitHubID, arg.GitHubLogin)
+	return err
+}
+
+const setOwnerEmail = `-- name: SetOwnerEmail :exec
+UPDATE owner SET github_email = ? WHERE id = 1
+`
+
+func (q *Queries) SetOwnerEmail(ctx context.Context, githubEmail string) error {
+	_, err := q.db.ExecContext(ctx, setOwnerEmail, githubEmail)
 	return err
 }
 

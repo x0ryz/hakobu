@@ -212,13 +212,16 @@ UPDATE github_app SET webhook_secret = ? WHERE id = 1;
 SELECT * FROM github_app WHERE id = 1;
 
 -- name: GetOwner :one
-SELECT github_id, github_login FROM owner WHERE id = 1;
+SELECT github_id, github_login, github_email FROM owner WHERE id = 1;
 
 -- name: SetOwner :exec
 INSERT INTO owner (id, github_id, github_login) VALUES (1, ?, ?);
 
 -- name: SetOwnerLogin :exec
 UPDATE owner SET github_login = ? WHERE id = 1;
+
+-- name: SetOwnerEmail :exec
+UPDATE owner SET github_email = ? WHERE id = 1;
 
 -- name: CreateSession :exec
 INSERT INTO sessions (id, github_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?);
@@ -293,8 +296,9 @@ UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zon
 SELECT * FROM notify WHERE id = 1;
 
 -- name: SaveNotify :exec
-INSERT INTO notify (id, email, sender_domain) VALUES (1, ?, ?)
-ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain;
+INSERT INTO notify (id, email, sender_domain, zone_id, added_address, routed_domain) VALUES (1, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain,
+	zone_id = excluded.zone_id, added_address = excluded.added_address, routed_domain = excluded.routed_domain;
 
 -- name: DeleteNotify :exec
 DELETE FROM notify WHERE id = 1;

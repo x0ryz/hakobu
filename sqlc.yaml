@@ -20,6 +20,7 @@ sql:
           trigger_source: Trigger
           github_login: GitHubLogin
           github_id: GitHubID
+          github_email: GitHubEmail
           sha256: SHA256
           memory_mb: MemoryMB
           snapshot_db: SnapshotDB
