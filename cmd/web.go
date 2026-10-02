@@ -599,13 +599,17 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"Disk": disk, "DiskLow": diskLow, "LastCleanup": ops.LastCleanup(),
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
-			"Notify": ops.Notifications(s),
+			"Notify": ops.Notifications(s), "Update": ops.Updates(version),
 		}
 		data["OAuthGrants"], _ = s.LiveOAuthGrants(r.Context())
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {
 			data["GitHubSlug"] = app.Slug
 		}
 		render(w, "settings", data)
+	})
+
+	action("POST /settings/update", func(r *http.Request) (string, error) {
+		return "", ops.RequestUpdate()
 	})
 
 	action("POST /settings/cleanup", func(r *http.Request) (string, error) {

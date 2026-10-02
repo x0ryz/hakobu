@@ -11,6 +11,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The signing key is a secret of this environment, which only v* tags
+    # may deploy to.
+    environment: release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,3 +30,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAKOBU_SIGNING_KEY: ${{ secrets.HAKOBU_SIGNING_KEY }}

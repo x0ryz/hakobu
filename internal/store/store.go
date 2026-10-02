@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -154,6 +155,11 @@ func (s *Store) finishRotation() error {
 		return err
 	}
 	s.rewrapSealedFiles()
+	// The copy kept for rolling hakobu back holds secrets under the old
+	// key: putting it back would leave them unreadable.
+	if err := os.Remove(filepath.Join(s.dir, "hakobu.db.prev")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Println("master key rotation: the database copy from before the last update is left:", err)
+	}
 	return secret.FinishRotation(s.keyPath)
 }
 

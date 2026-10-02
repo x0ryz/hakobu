@@ -716,6 +716,26 @@
     <p class="text-sm text-dim">Owner, the only one who can sign in: <span class="mono">{{.Owner}}</span></p>
     {{if .GitHubSlug}}<p class="text-sm text-dim">GitHub App: <a href="https://github.com/apps/{{.GitHubSlug}}" target="_blank" class="underline mono">{{.GitHubSlug}}</a> · <a href="https://github.com/apps/{{.GitHubSlug}}/installations/new" target="_blank" class="underline">manage repository access</a></p>{{end}}
   </div>
+  {{with .Update}}
+  <div id="update" class="card" {{if or .Requested (and .HasLast (eq .Last.State "running"))}}hx-get="/settings" hx-trigger="every 3s" hx-select="#update" hx-swap="outerHTML"{{end}}>
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="h2">Updates</h2>
+      {{if and .Available .Updater}}<button hx-post="/settings/update" hx-confirm="Update hakobu to {{.Latest}}? The panel is down for a minute while it restarts; apps keep running. If the new version doesn't come up, this one is put back." class="btn-pri" {{if or .Requested (and .HasLast (eq .Last.State "running"))}}disabled{{end}}>Update to {{.Latest}}</button>{{end}}
+    </div>
+    <p class="text-sm text-dim">This is hakobu <span class="mono">{{.Current}}</span>{{if .Available}}; <a href="https://github.com/x0ryz/hakobu/releases/tag/{{.Latest}}" target="_blank" class="underline mono">{{.Latest}}</a> is out.{{else if .Latest}}, the latest release.{{else}}.{{end}}</p>
+    {{if .Requested}}<p class="text-sm text-dim"><span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Update asked for…</p>
+    {{else if .HasLast}}{{with .Last}}
+    <p class="text-sm {{if or (eq .State "failed") (eq .State "rolled back")}}text-bad{{else}}text-dim{{end}}">
+      {{if eq .State "running"}}<span class="inline-block w-2 h-2 rounded-full bg-accent animate-pulse"></span> Updating to <span class="mono">{{.To}}</span>: {{.Message}}…
+      {{else if eq .State "updated"}}Updated from <span class="mono">{{.From}}</span> to <span class="mono">{{.To}}</span> at {{.At.Format "2006-01-02 15:04 UTC"}}.
+      {{else if eq .State "up to date"}}Checked at {{.At.Format "2006-01-02 15:04 UTC"}}: already the latest.
+      {{else if eq .State "rolled back"}}{{if .Message}}{{.Message}}{{else}}Rolled back from <span class="mono">{{.From}}</span> to <span class="mono">{{.To}}</span>{{end}} ({{.At.Format "2006-01-02 15:04 UTC"}}).
+      {{else}}Update to <span class="mono">{{.To}}</span> failed at {{.At.Format "2006-01-02 15:04 UTC"}}: {{.Message}}{{end}}
+    </p>
+    {{end}}{{end}}
+    <p class="text-xs text-faint">{{if .Updater}}A release is installed only if it's signed with hakobu's release key and matches its checksum. The panel can only ask for the latest release: a root service downloads and checks it, so the panel can't replace its own program. To go back to the version before the last update, run <span class="mono">sudo /opt/hakobu/hakobu rollback</span>.{{else}}This server has no updater yet: update once over SSH with the install command, which sets it up.{{end}}</p>
+  </div>
+  {{end}}
   <div class="card">
     <div class="flex items-center justify-between gap-3">
       <h2 class="h2">Backups</h2>

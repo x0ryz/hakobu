@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
 )
 
@@ -52,4 +53,41 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// SchemaVersion is the schema version this hakobu migrates databases to.
+func SchemaVersion() int {
+	names, _ := fs.Glob(migrationFiles, "migrations/*.sql")
+	return len(names)
+}
+
+// DatabaseVersion reads the schema version of the database at path,
+// without migrating it or needing the master key.
+func DatabaseVersion(path string) (int, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, err
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var version int
+	err = db.QueryRow(`PRAGMA user_version`).Scan(&version)
+	return version, err
+}
+
+// CopyDatabase writes a consistent copy of the database at path to dst,
+// which must not exist, without migrating it or needing the master key.
+func CopyDatabase(path, dst string) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`VACUUM INTO ?`, dst)
+	return err
 }

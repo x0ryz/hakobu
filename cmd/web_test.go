@@ -15,6 +15,7 @@ import (
 	"github.com/x0ryz/hakobu/internal/detect"
 	"github.com/x0ryz/hakobu/internal/ops"
 	"github.com/x0ryz/hakobu/internal/store"
+	"github.com/x0ryz/hakobu/internal/update"
 )
 
 func TestTemplatesRender(t *testing.T) {
@@ -31,7 +32,11 @@ func TestTemplatesRender(t *testing.T) {
 		"project": map[string]any{"Project": project, "Apps": []appView{app}, "Databases": []store.Database{*db}, "Storages": storages, "Sealed": []string{"P"}},
 		"new-app": map[string]any{"Project": "demo", "Repos": []string{"o/r"}, "InstallURL": "https://x", "Zones": []string{"example.com", "other.dev"}, "DefaultZone": "example.com"},
 		"presets": map[string]any{"Presets": []detect.Preset{{Strategy: "dockerfile", Path: ".", Stack: "Python · FastAPI", Port: 8000}, {Strategy: "railpack", Path: "web", Stack: "Node.js"}}},
-		"app":     map[string]any{"App": app, "Zones": []string{"example.com"}, "Sub": "web", "Zone": "example.com", "Project": project, "Databases": []store.Database{*db}, "Storages": storages, "Effective": []ops.EnvVar{{Key: "A", Value: "1"}, {Key: "S", Sealed: true}}, "SealedApp": []string{"S"}, "SealedWorker": []string{"W"}, "SealedProject": []string{"P"}, "Worker": worker, "WorkerStatus": "running", "Volumes": []store.Volume{{AppName: "web", Name: "data", MountPath: "/app/data"}}, "LastOOM": "2026-09-29T10:00:00Z", "DataRollbackBlocker": "no snapshot"},
+		"app": map[string]any{"App": app, "Zones": []string{"example.com"}, "Sub": "web", "Zone": "example.com", "Project": project, "Databases": []store.Database{*db}, "Storages": storages, "Effective": []ops.EnvVar{{Key: "A", Value: "1"}, {Key: "S", Sealed: true}}, "SealedApp": []string{"S"}, "SealedWorker": []string{"W"}, "SealedProject": []string{"P"}, "Worker": worker, "WorkerStatus": "running", "Volumes": []store.Volume{{AppName: "web", Name: "data", MountPath: "/app/data"}}, "LastOOM": "2026-09-29T10:00:00Z", "DataRollbackBlocker": "no snapshot",
+			"BackupBucket": "hakobu-backups-1", "VolumeJobRunning": true, "VolumeBackups": []volumeBackups{
+				{Volume: "data", Job: ops.DBJob{Running: "backing up"}, Backups: []store.VolumeBackup{{ID: 1, ObjectKey: "k", SizeBytes: 10}, {ID: 2, VerifiedAt: "t", Files: 3}, {ID: 3, VerifiedAt: "t", VerifyError: "boom"}}},
+				{Volume: "cache", Job: ops.DBJob{Last: "x", Failed: true}},
+			}},
 		"deploys": map[string]any{"App": "web", "Running": true, "Logs": []store.DeployLog{{Status: "running", Output: "x"}}},
 		"output":  "log line",
 		"errors":  []store.TelemetryEvent{{Kind: "error", Message: "boom"}},
@@ -40,7 +45,8 @@ func TestTemplatesRender(t *testing.T) {
 		"settings": map[string]any{"PublicHost": "p", "Owner": "me", "GitHubSlug": "hakobu-p", "Disk": "1.0 GB of 10.0 GB used (10%)", "DiskLow": true, "LastCleanup": "2026-09-27 12:00: freed 1.0 GB", "BackupBucket": "hakobu-backups-1",
 			"Rotation":            ops.Rotation{Started: "2026-09-30 10:00", Log: "done    x\n", Manual: []string{"GitHub App ..."}, Failures: 1},
 			"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@example.org", From: "hakobu@mail.p"},
-			"OAuthGrants": []store.OAuthGrant{{ID: 1, ClientName: "Claude", Scope: "read deploy", CreatedAt: "t", LastUsedAt: "u"}}},
+			"OAuthGrants": []store.OAuthGrant{{ID: 1, ClientName: "Claude", Scope: "read deploy", CreatedAt: "t", LastUsedAt: "u"}},
+			"Update":      ops.UpdateInfo{Current: "v0.6.0", Latest: "v0.7.0", Available: true, Updater: true, HasLast: true, Last: update.Status{State: "running", To: "v0.7.0", Message: "downloading"}}},
 		"oauth-consent": map[string]any{"Client": oauthClient{ID: "https://claude.ai/oauth/claude-code-client-metadata", Name: "Claude Code"}, "Request": authorizeRequest{Query: "a=b"},
 			"RedirectHost": "localhost:3118", "Loopback": true, "Document": true, "Deploy": true, "PublicHost": "p"},
 		"oauth-error": "boom",
@@ -53,10 +59,16 @@ func TestTemplatesRender(t *testing.T) {
 	// The other branches: no worker, no apps domain, scan error, backups off.
 	for name, data := range map[string]any{
 		"database": map[string]any{"DB": db, "Job": ops.DBJob{Last: "x", Failed: true}},
-		"settings": map[string]any{"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Err: "no token"}},
+		"settings": map[string]any{"CloudflareConnected": true, "Notify": ops.NotifyInfo{On: true, Err: "no token"}, "Update": ops.UpdateInfo{Current: "dev"}},
 	} {
 		if err := templates.ExecuteTemplate(io.Discard, name, data); err != nil {
 			t.Errorf("%s without backups: %v", name, err)
+		}
+	}
+	for _, st := range []string{"updated", "up to date", "failed", "rolled back"} {
+		data := map[string]any{"Update": ops.UpdateInfo{Current: "v0.7.0", Latest: "v0.7.0", Updater: true, HasLast: true, Last: update.Status{State: st, From: "v0.6.0", To: "v0.7.0"}}}
+		if err := templates.ExecuteTemplate(io.Discard, "settings", data); err != nil {
+			t.Errorf("settings after an update that %s: %v", st, err)
 		}
 	}
 	if err := templates.ExecuteTemplate(io.Discard, "app", map[string]any{"App": app, "Project": project}); err != nil {

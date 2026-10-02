@@ -30,6 +30,16 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# checksums.txt.sig: what `hakobu update` and install.sh check before
+# installing anything (scripts/sign-release.sh). Without the key the
+# release fails rather than going out unsigned.
+signs:
+  - id: release
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    cmd: sh
+    args: ["scripts/sign-release.sh", "{{ .Tag }}", "${artifact}", "${signature}"]
+
 changelog:
   sort: asc
   filters:

@@ -17,10 +17,20 @@
 #           HAKOBU_BINARY (install this local binary instead of downloading one),
 #           HAKOBU_FROM_SOURCE=1 (build the main branch instead of a release),
 #           HAKOBU_RESTORE=<key file> (bring back a panel from its backup, with the
-#             key file from its Settings, instead of setting up a new one)
+#             key file from its Settings, instead of setting up a new one),
+#           HAKOBU_ALLOW_UNSIGNED=1 (install a release from before releases were
+#             signed, checked against its checksum only)
+#
+# Later updates: Settings → Updates in the panel, or sudo /opt/hakobu/hakobu update.
 set -euo pipefail
 
 HAKOBU_REPO="${HAKOBU_REPO:-x0ryz/hakobu}"
+# Releases are signed (scripts/sign-release.sh); a download is installed
+# only with a signature by this key over "hakobu <version>" and its
+# checksums. The same key is in internal/update for `hakobu update`.
+RELEASE_KEY="-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAWBkGQ8EE1VzJYgZkPLxDY1JCviWclccA/tDM/FnQ0fI=
+-----END PUBLIC KEY-----"
 DATA=/opt/hakobu/data
 KEY_DIR=/opt/hakobu/key # the master key, apart from data/
 
@@ -45,8 +55,9 @@ if [ -f "$UNIT" ] && ! grep -q '^User=hakobu$' "$UNIT"; then
   ROOTFUL=1
 fi
 
-echo "==> installing dependencies (docker, git, railpack)"
+echo "==> installing dependencies (docker, git, openssl, railpack)"
 command -v curl >/dev/null || { apt-get update && apt-get install -y curl; } || yum install -y curl
+command -v openssl >/dev/null || { apt-get update && apt-get install -y openssl; } || yum install -y openssl
 HAD_DOCKER=""
 if command -v docker >/dev/null; then
   HAD_DOCKER=1
@@ -217,18 +228,39 @@ if [ -n "${HAKOBU_BINARY:-}" ]; then
   cp "$HAKOBU_BINARY" /opt/hakobu/hakobu
   echo "    local binary $HAKOBU_BINARY"
 elif [ -z "${HAKOBU_FROM_SOURCE:-}" ]; then
-  if ! curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu.new; then
+  RELEASE_URL="https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}"
+  if ! curl -fsSL "$RELEASE_URL/hakobu-linux-${ARCH}" -o /opt/hakobu/hakobu.new; then
     abort_install "couldn't download hakobu-linux-${ARCH} ${VERSION}"
   fi
+  SIG_DIR="$(mktemp -d)"
+  if ! curl -fsSL "$RELEASE_URL/checksums.txt" -o "$SIG_DIR/checksums.txt"; then
+    rm -rf "$SIG_DIR"
+    abort_install "couldn't download the checksums of ${VERSION}"
+  fi
+  # The signature covers "hakobu <version>" and the checksums, so neither
+  # the files nor the version they're of can be swapped.
+  CHECKED="checksum verified"
+  if curl -fsSL "$RELEASE_URL/checksums.txt.sig" -o "$SIG_DIR/checksums.txt.sig" 2>/dev/null; then
+    printf '%s\n' "$RELEASE_KEY" > "$SIG_DIR/release-key.pub"
+    { printf 'hakobu %s\n' "$VERSION"; cat "$SIG_DIR/checksums.txt"; } > "$SIG_DIR/signed"
+    if ! openssl pkeyutl -verify -rawin -pubin -inkey "$SIG_DIR/release-key.pub" -in "$SIG_DIR/signed" -sigfile "$SIG_DIR/checksums.txt.sig" >/dev/null 2>&1; then
+      rm -rf "$SIG_DIR"
+      abort_install "the signature of hakobu ${VERSION} isn't hakobu's, not installing it"
+    fi
+    CHECKED="signature and checksum verified"
+  elif [ -z "${HAKOBU_ALLOW_UNSIGNED:-}" ]; then
+    rm -rf "$SIG_DIR"
+    abort_install "hakobu ${VERSION} isn't signed (released before signing, or the signature is missing); set HAKOBU_ALLOW_UNSIGNED=1 to install it checked against its checksum only"
+  fi
   # A download that doesn't match the release's checksum is never installed.
-  SUMS="$(curl -fsSL "https://github.com/${HAKOBU_REPO}/releases/download/${VERSION}/checksums.txt")"
-  WANT="$(printf '%s\n' "$SUMS" | awk -v f="hakobu-linux-${ARCH}" '$2 == f {print $1}')"
+  WANT="$(awk -v f="hakobu-linux-${ARCH}" '$2 == f {print $1}' "$SIG_DIR/checksums.txt")"
+  rm -rf "$SIG_DIR"
   GOT="$(sha256sum /opt/hakobu/hakobu.new | cut -d' ' -f1)"
   if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then
     abort_install "checksum mismatch for hakobu-linux-${ARCH} ${VERSION}, not installing it"
   fi
   mv /opt/hakobu/hakobu.new /opt/hakobu/hakobu
-  echo "    hakobu $VERSION (checksum verified)"
+  echo "    hakobu $VERSION ($CHECKED)"
 else
   echo "==> building hakobu from the main branch"
   GO_NEED="1.27.1"
@@ -253,6 +285,9 @@ else
   rm -rf "$SRC"
 fi
 chmod +x /opt/hakobu/hakobu
+# What `hakobu rollback` would put back belongs to an update this
+# install replaced.
+rm -f /opt/hakobu/hakobu.prev /opt/hakobu/update-state.json
 
 if [ -n "${HAKOBU_RESTORE:-}" ]; then
   echo "==> restoring the panel from its backup"
@@ -348,8 +383,32 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 EOF
 fi
+# The panel's Update button: hakobu, which can't write its own binary,
+# creates data/update-request, and systemd runs the update as root. It
+# installs the latest signed release, whatever the request says.
+cat > /etc/systemd/system/hakobu-update.path <<'EOF'
+[Unit]
+Description=hakobu updates asked for in its panel
+
+[Path]
+PathExists=/opt/hakobu/data/update-request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/hakobu-update.service <<'EOF'
+[Unit]
+Description=Update hakobu to its latest signed release
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hakobu
+ExecStart=/opt/hakobu/hakobu update --requested
+TimeoutStartSec=20min
+EOF
 systemctl daemon-reload
 systemctl enable hakobu >/dev/null 2>&1
+systemctl enable --now hakobu-update.path >/dev/null 2>&1
 systemctl restart hakobu
 
 for _ in $(seq 1 30); do

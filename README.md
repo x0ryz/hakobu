@@ -99,6 +99,23 @@ renewed for up to 30 days of disuse; a renewal token used twice disconnects its 
 The panel's Cloudflare zone must let Anthropic's servers (`160.79.104.0/21`) reach `/mcp`, `/oauth/*`
 and `/.well-known/*`: a WAF rule, Bot Fight Mode or Cloudflare Access in front of the panel blocks them.
 
+### Updating
+
+**Settings → Updates** shows when a new release is out; **Update** installs it. Over SSH:
+`sudo /opt/hakobu/hakobu update`. Apps keep running; the panel is down for the minute it
+restarts. If the new version doesn't come up, the previous one is put back by itself, and
+`sudo /opt/hakobu/hakobu rollback` goes back to it later. A rollback past an update that
+changed the panel's database also puts back the copy of the database made just before it
+(what changed in the panel since is lost; the newer database is kept beside it).
+
+Releases are signed with an Ed25519 key that never leaves the release workflow
+(`scripts/sign-release.sh`): hakobu and install.sh install a release only if its signature
+over `hakobu <version>` and its checksums is by that key, so neither a tampered download
+nor an older release under a newer name gets in. The panel can't update itself: it runs
+as `hakobu`, which can't write its own program, and only asks; a root service
+(`hakobu-update.path`) then installs the latest signed release, whatever the request said.
+Releases from before signing install only with `HAKOBU_ALLOW_UNSIGNED=1`.
+
 ### Bringing a panel back on a new server
 
 With backups on, the panel's own database goes to the backup bucket daily, sealed with the
@@ -160,6 +177,14 @@ The panel's scripts, styles and fonts are embedded in the binary (`cmd/static/`)
 from other sites. After changing classes in `cmd/web.html`, rebuild the stylesheet with
 `go generate ./cmd` (needs [bun](https://bun.sh); runs Tailwind 3 with `cmd/tailwind.config.js`).
 
+### Releases
+
+Pushing a `vX.Y.Z` tag builds and publishes a release (`.github/workflows/release.yml`). It
+is signed with the key in the `HAKOBU_SIGNING_KEY` secret of the `release` environment
+(the PEM file, or its base64 line); without it the release fails rather than going out
+unsigned. Its public half is `scripts/release-key.pub`, also in `internal/update` and
+`install.sh` (`TestReleaseKeysAgree`). `just release-check` builds a snapshot without signing.
+
 ### Database changes
 
 - Schema: `internal/store/migrations/NNN_name.sql`, applied in order at startup and tracked in `PRAGMA user_version`. Add a new file for every change, never edit one that has shipped.
@@ -182,6 +207,7 @@ sqlc generate
 - `internal/github/` — GitHub App, OAuth
 - `internal/store/` — SQLite: migrations, sqlc queries
 - `internal/secret/` — encryption of secrets in the database
+- `internal/update/` — signed releases: `hakobu update` and `hakobu rollback`
 - `internal/backup/` — streaming pg_dump/restore, tar of volumes
 - `internal/s3/` — checking which buckets a storage's keys reach
 

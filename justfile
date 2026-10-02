@@ -34,4 +34,4 @@ check: build test vuln
 # Validate the GoReleaser config and build a local snapshot into dist/
 release-check:
     goreleaser check
-    goreleaser release --snapshot --clean
+    goreleaser release --snapshot --clean --skip=sign
