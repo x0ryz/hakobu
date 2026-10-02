@@ -78,6 +78,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	go runProxyPoller(s)
 	go ops.WatchDeaths(s)
 	go ops.WatchHealth(s)
+	go ops.WatchMetrics(s)
 	go runBackupScheduler(s)
 	if err := ops.StartTunnel(s); err != nil {
 		fmt.Println("failed to start the tunnel:", err)

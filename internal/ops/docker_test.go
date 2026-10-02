@@ -69,6 +69,7 @@ func TestDockerDeploys(t *testing.T) {
 	if ok, why, checked := checkHealth(reload()); !ok || !checked {
 		t.Errorf("the live app fails its health check: %q (checked %v)", why, checked)
 	}
+	checkStats(t, s, reload())
 	v1 := deploy.ImageID(ctx(), ImageTag(app))
 
 	// Volumes: recreate mode, data survives.
@@ -667,4 +668,31 @@ func TestDockerVolumeBackup(t *testing.T) {
 		t.Errorf("after restore:\n%s\nwant:\n%s", got, want)
 	}
 	expectServing(t, app, "v1")
+}
+
+// checkStats: the live container's usage is read and recorded under the
+// app's name.
+func checkStats(t *testing.T, s *store.Store, app store.App) {
+	t.Helper()
+	running, err := deploy.RunningContainers(ctx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range running {
+		if c.Name != app.ContainerName() {
+			continue
+		}
+		if target := containerTargets(s)[c.Name]; target.name != "app:"+app.Name {
+			t.Errorf("recorded as %q", target.name)
+		}
+		counters, err := deploy.ContainerStats(ctx(), c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counters.Memory == 0 || counters.CPUNanos == 0 {
+			t.Errorf("stats of the live container: %+v", counters)
+		}
+		return
+	}
+	t.Errorf("%s isn't among the running containers", app.ContainerName())
 }

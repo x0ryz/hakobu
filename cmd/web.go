@@ -178,6 +178,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 		}
 	}
 	handle := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, authed(h)) }
+	registerUsageRoutes(handle, s)
 
 	// action wraps a mutating handler: an error becomes a toast, success reloads the page.
 	action := func(pattern string, h func(r *http.Request) (redirect string, err error)) {
@@ -601,6 +602,9 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 			"BackupBucket": ops.BackupBucket(s), "CloudflareConnected": ops.CloudflareConnected(s),
 			"Rotation": ops.LastRotation(), "PanelBackup": ops.LastPanelBackup(), "KeyDownloaded": ops.KeyDownloaded(),
 			"Notify": ops.Notifications(s), "Update": ops.Updates(version),
+		}
+		if usage, err := ops.CurrentUsage(s); err == nil {
+			data["Usage"] = usageRows(usage)
 		}
 		data["OAuthGrants"], _ = s.LiveOAuthGrants(r.Context())
 		if app, err := s.GetGitHubApp(r.Context()); err == nil {

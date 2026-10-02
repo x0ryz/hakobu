@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -211,6 +212,39 @@ func newMCPServer(s *store.Store) *mcp.Server {
 			return nil, out, err
 		})
 
+	mcp.AddTool(server, &mcp.Tool{Name: "get_metrics", Description: "Show the CPU and memory use of an app, its worker, the PostgreSQL server or the whole server over a span, with its limits: now, average and peak, and a series of up to 60 points. Recorded every minute.", Annotations: readOnly},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			Target string `json:"target" jsonschema:"an app's name, \"server\" or \"postgres\""`
+			Worker bool   `json:"worker,omitempty" jsonschema:"the app's worker instead of the app"`
+			Range  string `json:"range,omitempty" jsonschema:"1h, 24h (default), 7d or 30d"`
+		}) (*mcp.CallToolResult, mcpUsage, error) {
+			target := ops.HostTarget
+			switch in.Target {
+			case "server", "host":
+			case "postgres":
+				target = "service:postgres"
+			default:
+				app, err := getApp(ctx, in.Target)
+				if err != nil {
+					return nil, mcpUsage{}, err
+				}
+				target = "app:" + app.Name
+				if in.Worker {
+					target = "worker:" + app.Name
+				}
+			}
+			rng := in.Range
+			span, ok := ops.MetricRanges[rng]
+			if !ok {
+				rng, span = "24h", ops.MetricRanges["24h"]
+			}
+			rows, err := ops.UsageOf(s, target, span)
+			if err != nil {
+				return nil, mcpUsage{}, err
+			}
+			return nil, summarizeUsage(target, rng, rows), nil
+		})
+
 	mcp.AddTool(server, &mcp.Tool{Name: "list_errors", Description: "List the latest errors, crashes, out-of-memory kills and health check outages of an app, newest first: what its Sentry SDK sent and what hakobu saw.", Annotations: readOnly},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			App   string `json:"app" jsonschema:"the app's name"`
@@ -355,4 +389,65 @@ func tail(s string, n int) string {
 		i++
 	}
 	return "…" + s[i:]
+}
+
+// mcpUsage is a target's usage over a span for get_metrics.
+type mcpUsage struct {
+	Target string      `json:"target"`
+	Range  string      `json:"range"`
+	CPU    mcpStat     `json:"cpu_cores"`
+	Memory mcpStat     `json:"memory_mb"`
+	Series []mcpSample `json:"series" jsonschema:"oldest first; empty when nothing was recorded"`
+}
+
+type mcpStat struct {
+	Now   float64 `json:"now"`
+	Avg   float64 `json:"avg"`
+	Peak  float64 `json:"peak"`
+	Limit float64 `json:"limit,omitempty" jsonschema:"none when 0"`
+}
+
+type mcpSample struct {
+	At      string  `json:"at"`
+	CPU     float64 `json:"cpu"`
+	CPUPeak float64 `json:"cpu_peak"`
+	MemMB   float64 `json:"memory_mb"`
+	MemPeak float64 `json:"memory_peak_mb"`
+}
+
+// summarizeUsage boils rows down to the stats and at most 60 points.
+func summarizeUsage(target, rng string, rows []teldb.Sample) mcpUsage {
+	u := mcpUsage{Target: target, Range: rng, Series: []mcpSample{}}
+	if len(rows) == 0 {
+		return u
+	}
+	round := func(v float64) float64 { return math.Round(v*100) / 100 }
+	mb := func(b int64) float64 { return float64(b) / (1 << 20) }
+	last := rows[len(rows)-1]
+	u.CPU = mcpStat{Now: last.Cpu, Limit: last.CpuLimit}
+	u.Memory = mcpStat{Now: mb(last.Mem), Limit: mb(last.MemLimit)}
+	per := (len(rows) + 59) / 60
+	for start := 0; start < len(rows); start += per {
+		group := rows[start:min(start+per, len(rows))]
+		var p mcpSample
+		for _, r := range group {
+			p.CPU += r.Cpu / float64(len(group))
+			p.MemMB += mb(r.Mem) / float64(len(group))
+			p.CPUPeak = max(p.CPUPeak, r.CpuMax)
+			p.MemPeak = max(p.MemPeak, mb(r.MemMax))
+		}
+		p.At = time.Unix(group[0].Ts, 0).UTC().Format(time.RFC3339)
+		p.CPU, p.CPUPeak, p.MemMB, p.MemPeak = round(p.CPU), round(p.CPUPeak), round(p.MemMB), round(p.MemPeak)
+		u.Series = append(u.Series, p)
+	}
+	for _, r := range rows {
+		u.CPU.Avg += r.Cpu / float64(len(rows))
+		u.Memory.Avg += mb(r.Mem) / float64(len(rows))
+		u.CPU.Peak = max(u.CPU.Peak, r.CpuMax)
+		u.Memory.Peak = max(u.Memory.Peak, mb(r.MemMax))
+	}
+	for _, st := range []*mcpStat{&u.CPU, &u.Memory} {
+		st.Now, st.Avg, st.Peak, st.Limit = round(st.Now), round(st.Avg), round(st.Peak), round(st.Limit)
+	}
+	return u
 }

@@ -487,6 +487,11 @@
     {{end}}
   </div>
 
+  <div class="card">
+    <h2 class="h2">Usage</h2>
+    <div hx-get="/usage?target=app:{{.App.Name}}{{if .Worker}}&amp;target=worker:{{.App.Name}}{{end}}&amp;range=24h" hx-trigger="load" hx-swap="outerHTML"></div>
+  </div>
+
   <form hx-post="/apps/{{.App.Name}}/limits" class="card">
     <div>
       <h2 class="h2">Resource limits</h2>
@@ -610,6 +615,16 @@
 
 {{define "output"}}<pre class="console max-h-[32rem] overflow-y-auto">{{if .}}{{.}}{{else}}(no output){{end}}</pre>{{end}}
 
+{{define "usage"}}<div class="usage space-y-4">
+  <div class="flex gap-1">{{range .Ranges}}<button type="button" hx-get="/usage?{{$.Query}}&amp;range={{.}}" hx-target="closest .usage" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if eq . $.Range}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">{{.}}</button>{{end}}</div>
+  {{range .Charts}}
+  <div>
+    <div class="flex flex-wrap items-baseline justify-between gap-x-3 text-xs"><span class="font-medium">{{.Title}}</span><span class="text-dim mono">{{.Now}} <span class="text-faint">· {{.Peak}}</span></span></div>
+    {{.SVG}}
+  </div>
+  {{else}}<p class="text-sm text-faint">Nothing recorded yet: hakobu records usage every minute.</p>{{end}}
+</div>{{end}}
+
 {{define "errors"}}
 <div class="space-y-2">
   {{range .}}
@@ -634,6 +649,11 @@
 </div>
 
 <div class="space-y-6">
+  <div class="card">
+    <h2 class="h2">Usage</h2>
+    <div hx-get="/usage?target=service:postgres&amp;range=24h" hx-trigger="load" hx-swap="outerHTML"></div>
+  </div>
+
   <div class="card">
     <h2 class="h2">Connection</h2>
     <p class="text-xs text-faint">Used by: {{range $i, $a := .UsedBy}}{{if $i}}, {{end}}<a href="/apps/{{$a}}" class="underline">{{$a}}</a>{{else}}no apps — link it from an app's Overview.{{end}} Reachable from apps only (host <span class="mono">hakobu-postgres</span> on the internal docker network).</p>
@@ -814,6 +834,19 @@
       {{end}}
     </div>
     {{end}}{{end}}
+  </div>
+
+  <div id="server" class="card">
+    <h2 class="h2">Server</h2>
+    <div hx-get="/usage?target=host&amp;range=24h" hx-trigger="load" hx-swap="outerHTML"></div>
+    {{with .Usage}}
+    <table class="w-full text-sm">
+      <thead><tr class="text-xs text-faint text-left"><th class="font-normal py-1">Using it now</th><th class="font-normal">CPU</th><th class="font-normal">Memory</th></tr></thead>
+      <tbody>{{range .}}
+        <tr class="border-t border-edge"><td class="py-1.5">{{if .Link}}<a href="{{.Link}}" class="underline mono">{{.Name}}</a>{{else}}<span class="mono">{{.Name}}</span>{{end}}</td><td class="mono text-dim">{{.CPU}}</td><td class="mono {{if ge .MemPct 90}}text-bad{{else}}text-dim{{end}}">{{.Memory}}</td></tr>
+      {{end}}</tbody>
+    </table>
+    {{end}}
   </div>
 
   <div class="card">

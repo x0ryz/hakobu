@@ -8,6 +8,26 @@ import (
 	"github.com/x0ryz/hakobu/internal/secret"
 )
 
+type Sample struct {
+	Target    string
+	Res       int64
+	Slot      int64
+	Ts        int64
+	Cpu       float64
+	CpuMax    float64
+	CpuLimit  float64
+	Mem       int64
+	MemMax    int64
+	MemLimit  int64
+	NetRx     float64
+	NetTx     float64
+	DiskRead  float64
+	DiskWrite float64
+	Load      float64
+	DiskUsed  int64
+	DiskTotal int64
+}
+
 type TelemetryEvent struct {
 	ID        int64
 	AppName   string

@@ -34,6 +34,15 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 	return err
 }
 
+const deleteSamplesOf = `-- name: DeleteSamplesOf :exec
+DELETE FROM samples WHERE target = ?
+`
+
+func (q *Queries) DeleteSamplesOf(ctx context.Context, target string) error {
+	_, err := q.db.ExecContext(ctx, deleteSamplesOf, target)
+	return err
+}
+
 const deleteTelemetryOfApp = `-- name: DeleteTelemetryOfApp :exec
 DELETE FROM telemetry_events WHERE app_name = ?
 `
@@ -81,6 +90,107 @@ func (q *Queries) LastTelemetryOfKind(ctx context.Context, arg LastTelemetryOfKi
 	var created_at string
 	err := row.Scan(&created_at)
 	return created_at, err
+}
+
+const latestSamples = `-- name: LatestSamples :many
+SELECT target, res, slot, ts, cpu, cpu_max, cpu_limit, mem, mem_max, mem_limit, net_rx, net_tx, disk_read, disk_write, load, disk_used, disk_total FROM samples WHERE res = ? AND ts >= ? ORDER BY ts
+`
+
+type LatestSamplesParams struct {
+	Res int64
+	Ts  int64
+}
+
+func (q *Queries) LatestSamples(ctx context.Context, arg LatestSamplesParams) ([]Sample, error) {
+	rows, err := q.db.QueryContext(ctx, latestSamples, arg.Res, arg.Ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Sample
+	for rows.Next() {
+		var i Sample
+		if err := rows.Scan(
+			&i.Target,
+			&i.Res,
+			&i.Slot,
+			&i.Ts,
+			&i.Cpu,
+			&i.CpuMax,
+			&i.CpuLimit,
+			&i.Mem,
+			&i.MemMax,
+			&i.MemLimit,
+			&i.NetRx,
+			&i.NetTx,
+			&i.DiskRead,
+			&i.DiskWrite,
+			&i.Load,
+			&i.DiskUsed,
+			&i.DiskTotal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSamples = `-- name: ListSamples :many
+SELECT target, res, slot, ts, cpu, cpu_max, cpu_limit, mem, mem_max, mem_limit, net_rx, net_tx, disk_read, disk_write, load, disk_used, disk_total FROM samples WHERE target = ? AND res = ? AND ts >= ? ORDER BY ts
+`
+
+type ListSamplesParams struct {
+	Target string
+	Res    int64
+	Ts     int64
+}
+
+func (q *Queries) ListSamples(ctx context.Context, arg ListSamplesParams) ([]Sample, error) {
+	rows, err := q.db.QueryContext(ctx, listSamples, arg.Target, arg.Res, arg.Ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Sample
+	for rows.Next() {
+		var i Sample
+		if err := rows.Scan(
+			&i.Target,
+			&i.Res,
+			&i.Slot,
+			&i.Ts,
+			&i.Cpu,
+			&i.CpuMax,
+			&i.CpuLimit,
+			&i.Mem,
+			&i.MemMax,
+			&i.MemLimit,
+			&i.NetRx,
+			&i.NetTx,
+			&i.DiskRead,
+			&i.DiskWrite,
+			&i.Load,
+			&i.DiskUsed,
+			&i.DiskTotal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listTelemetryEvents = `-- name: ListTelemetryEvents :many
@@ -139,4 +249,137 @@ DELETE FROM telemetry_events WHERE kind = 'log' AND created_at < ?
 func (q *Queries) PruneLogs(ctx context.Context, createdAt string) error {
 	_, err := q.db.ExecContext(ctx, pruneLogs, createdAt)
 	return err
+}
+
+const pruneSamples = `-- name: PruneSamples :exec
+DELETE FROM samples WHERE ts < ?
+`
+
+func (q *Queries) PruneSamples(ctx context.Context, ts int64) error {
+	_, err := q.db.ExecContext(ctx, pruneSamples, ts)
+	return err
+}
+
+const putSample = `-- name: PutSample :exec
+INSERT INTO samples (target, res, slot, ts, cpu, cpu_max, cpu_limit, mem, mem_max, mem_limit, net_rx, net_tx, disk_read, disk_write, load, disk_used, disk_total)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (target, res, slot) DO UPDATE SET
+	ts = excluded.ts, cpu = excluded.cpu, cpu_max = excluded.cpu_max, cpu_limit = excluded.cpu_limit,
+	mem = excluded.mem, mem_max = excluded.mem_max, mem_limit = excluded.mem_limit,
+	net_rx = excluded.net_rx, net_tx = excluded.net_tx, disk_read = excluded.disk_read, disk_write = excluded.disk_write,
+	load = excluded.load, disk_used = excluded.disk_used, disk_total = excluded.disk_total
+`
+
+type PutSampleParams struct {
+	Target    string
+	Res       int64
+	Slot      int64
+	Ts        int64
+	Cpu       float64
+	CpuMax    float64
+	CpuLimit  float64
+	Mem       int64
+	MemMax    int64
+	MemLimit  int64
+	NetRx     float64
+	NetTx     float64
+	DiskRead  float64
+	DiskWrite float64
+	Load      float64
+	DiskUsed  int64
+	DiskTotal int64
+}
+
+func (q *Queries) PutSample(ctx context.Context, arg PutSampleParams) error {
+	_, err := q.db.ExecContext(ctx, putSample,
+		arg.Target,
+		arg.Res,
+		arg.Slot,
+		arg.Ts,
+		arg.Cpu,
+		arg.CpuMax,
+		arg.CpuLimit,
+		arg.Mem,
+		arg.MemMax,
+		arg.MemLimit,
+		arg.NetRx,
+		arg.NetTx,
+		arg.DiskRead,
+		arg.DiskWrite,
+		arg.Load,
+		arg.DiskUsed,
+		arg.DiskTotal,
+	)
+	return err
+}
+
+const summarizeSamples = `-- name: SummarizeSamples :many
+SELECT target,
+	CAST(avg(cpu) AS REAL) AS cpu, CAST(max(cpu_max) AS REAL) AS cpu_max, CAST(max(cpu_limit) AS REAL) AS cpu_limit,
+	CAST(avg(mem) AS INTEGER) AS mem, CAST(max(mem_max) AS INTEGER) AS mem_max, CAST(max(mem_limit) AS INTEGER) AS mem_limit,
+	CAST(avg(net_rx) AS REAL) AS net_rx, CAST(avg(net_tx) AS REAL) AS net_tx,
+	CAST(avg(disk_read) AS REAL) AS disk_read, CAST(avg(disk_write) AS REAL) AS disk_write,
+	CAST(avg(load) AS REAL) AS load, CAST(max(disk_used) AS INTEGER) AS disk_used, CAST(max(disk_total) AS INTEGER) AS disk_total
+FROM samples WHERE res = ? AND ts >= ? AND ts < ? GROUP BY target
+`
+
+type SummarizeSamplesParams struct {
+	Res  int64
+	Ts   int64
+	Ts_2 int64
+}
+
+type SummarizeSamplesRow struct {
+	Target    string
+	Cpu       float64
+	CpuMax    float64
+	CpuLimit  float64
+	Mem       int64
+	MemMax    int64
+	MemLimit  int64
+	NetRx     float64
+	NetTx     float64
+	DiskRead  float64
+	DiskWrite float64
+	Load      float64
+	DiskUsed  int64
+	DiskTotal int64
+}
+
+func (q *Queries) SummarizeSamples(ctx context.Context, arg SummarizeSamplesParams) ([]SummarizeSamplesRow, error) {
+	rows, err := q.db.QueryContext(ctx, summarizeSamples, arg.Res, arg.Ts, arg.Ts_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SummarizeSamplesRow
+	for rows.Next() {
+		var i SummarizeSamplesRow
+		if err := rows.Scan(
+			&i.Target,
+			&i.Cpu,
+			&i.CpuMax,
+			&i.CpuLimit,
+			&i.Mem,
+			&i.MemMax,
+			&i.MemLimit,
+			&i.NetRx,
+			&i.NetTx,
+			&i.DiskRead,
+			&i.DiskWrite,
+			&i.Load,
+			&i.DiskUsed,
+			&i.DiskTotal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

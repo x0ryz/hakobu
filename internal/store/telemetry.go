@@ -122,6 +122,11 @@ func (s *Store) dropTelemetry() {
 
 // deleteTelemetryOf removes the telemetry of a deleted app.
 func (s *Store) deleteTelemetryOf(ctx context.Context, app string) error {
+	for _, target := range []string{"app:" + app, "worker:" + app} {
+		if err := s.Tel.DeleteSamplesOf(ctx, target); err != nil {
+			return err
+		}
+	}
 	return s.Tel.DeleteTelemetryOfApp(ctx, app)
 }
 
@@ -132,6 +137,10 @@ func (s *Store) pruneTelemetry(ctx context.Context, retentionDays int) error {
 		return err
 	}
 	if err := s.Tel.PruneEvents(ctx, timestamp(time.Now().Add(-eventRetention))); err != nil {
+		return err
+	}
+	// The rings overwrite their own slots; this drops targets gone for good.
+	if err := s.Tel.PruneSamples(ctx, time.Now().Add(-eventRetention).Unix()); err != nil {
 		return err
 	}
 	_, err := s.telDB.ExecContext(ctx, `PRAGMA incremental_vacuum`)
