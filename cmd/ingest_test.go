@@ -37,7 +37,7 @@ func TestIngestTraces(t *testing.T) {
 	}
 	app, _ := s.GetApp(ctx, "web")
 	mux := http.NewServeMux()
-	registerIngestRoutes(mux, s)
+	mux.HandleFunc("POST /api/{app_id}/envelope/", ingestHandler(s))
 
 	for _, name := range []string{"python_transaction", "python_error_in_transaction", "python_failed_transaction"} {
 		body, err := os.ReadFile("../internal/ingest/testdata/" + name + ".envelope")

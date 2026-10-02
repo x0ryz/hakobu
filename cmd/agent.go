@@ -63,7 +63,10 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhook/github", webhookHandler(s))
 	registerWebRoutes(mux, s)
-	registerIngestRoutes(mux, s)
+	ingest := ingestHandler(s)
+	mux.HandleFunc("POST /api/{app_id}/envelope/", ingest)
+	ingestMux := http.NewServeMux()
+	ingestMux.HandleFunc("POST /api/{app_id}/envelope/", ingest)
 
 	ln, err := net.Listen("tcp", agentAddr)
 	if err != nil {
@@ -71,6 +74,10 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	}
 
 	sock, err := listenPanelSocket()
+	if err != nil {
+		return err
+	}
+	ingestSock, err := listenSocket(ops.IngestSocketDir, filepath.Base(ops.IngestSocket()))
 	if err != nil {
 		return err
 	}
@@ -104,6 +111,13 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			fmt.Println("panel socket:", err)
 		}
 	}()
+	go func() {
+		ingestSrv := &http.Server{Handler: ingestMux, ReadTimeout: config.ReadTimeout, WriteTimeout: config.ReadTimeout, IdleTimeout: config.IdleTimeout}
+		if err := ingestSrv.Serve(ingestSock); err != nil {
+			fmt.Println("ingest socket:", err)
+		}
+	}()
+	go ops.KeepIngestRelay(s)
 	return srv.Serve(ln)
 }
 
@@ -111,13 +125,19 @@ func runAgent(cmd *cobra.Command, args []string) error {
 // panel: a unix socket in a directory mounted into it. The socket is open to
 // every local user, like the loopback port.
 func listenPanelSocket() (net.Listener, error) {
-	if err := os.MkdirAll(ops.PanelSocketDir, 0o755); err != nil {
+	return listenSocket(ops.PanelSocketDir, "panel.sock")
+}
+
+// listenSocket listens on a unix socket open to every local user (the
+// containers mounting its directory run as other users) in dir.
+func listenSocket(dir, name string) (net.Listener, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(ops.PanelSocketDir, 0o755); err != nil {
+	if err := os.Chmod(dir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(ops.PanelSocketDir, "panel.sock")
+	path := filepath.Join(dir, name)
 	os.Remove(path) // left by the previous run
 	ln, err := net.Listen("unix", path)
 	if err != nil {

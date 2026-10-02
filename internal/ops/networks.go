@@ -21,7 +21,8 @@ func ProjectNetwork(project string) string { return "hakobu_" + project }
 func projectEdge(project string) string    { return "hakobu_" + project + "_edge" }
 
 // ensureProjectNetworks creates the project's networks and connects the
-// shared services and cloudflared to them, whichever of those run.
+// shared services, the ingest relay and cloudflared to them, whichever of
+// those run.
 func ensureProjectNetworks(project string) error {
 	net, edge := ProjectNetwork(project), projectEdge(project)
 	for _, n := range []string{net, edge} {
@@ -29,7 +30,7 @@ func ensureProjectNetworks(project string) error {
 			return err
 		}
 	}
-	for container, network := range map[string]string{PostgresContainer: net, tunnelContainer: edge} {
+	for container, network := range map[string]string{PostgresContainer: net, ingestContainer: net, tunnelContainer: edge} {
 		if st, _ := deploy.ContainerStatus(ctx(), container); st == "not found" || st == "unknown" {
 			continue
 		}
@@ -59,7 +60,7 @@ func ensureAllProjectNetworks(s *store.Store) error {
 // project's networks and removes them.
 func removeProjectNetworks(project string) error {
 	for _, n := range []string{ProjectNetwork(project), projectEdge(project)} {
-		for _, c := range []string{PostgresContainer, tunnelContainer} {
+		for _, c := range []string{PostgresContainer, ingestContainer, tunnelContainer} {
 			if err := deploy.DisconnectNetwork(ctx(), c, n); err != nil {
 				return err
 			}

@@ -267,7 +267,9 @@ func baseEnv(s *store.Store, app store.App, port int64) ([]string, error) {
 				return nil, err
 			}
 		}
-		env = append(env, fmt.Sprintf("SENTRY_DSN=https://%s@%s/%d", key, host, app.ID))
+		// Server SDKs report inside the server: from its address
+		// Cloudflare may challenge them. Browser SDKs need the public one.
+		env = append(env, "SENTRY_DSN="+ingestDSN(key, app.ID), fmt.Sprintf("SENTRY_PUBLIC_DSN=https://%s@%s/%d", key, host, app.ID))
 	}
 	p, err := s.GetProject(ctx(), app.ProjectName)
 	if err != nil {

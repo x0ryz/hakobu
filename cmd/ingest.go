@@ -99,12 +99,14 @@ func (l *limiter) allow(key string) bool {
 	return true
 }
 
-// registerIngestRoutes accepts Sentry envelopes at the DSN every app gets as
-// SENTRY_DSN; errors, structured logs and traces are stored, other items
-// dropped.
-func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
+// ingestHandler accepts Sentry envelopes at POST /api/{app_id}/envelope/,
+// the DSN every app gets as SENTRY_DSN; errors, structured logs and traces
+// are stored, other items dropped. It's served both on the panel and, for
+// the apps on this server, on the ingest socket (ingest_relay.go), with
+// the same rate limits.
+func ingestHandler(s *store.Store) http.HandlerFunc {
 	lim := newLimiter()
-	mux.HandleFunc("POST /api/{app_id}/envelope/", func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		appID, _ := strconv.ParseInt(r.PathValue("app_id"), 10, 64)
 		app, err := s.GetAppByID(r.Context(), appID)
 		if err != nil || app.SentryKey == "" || subtle.ConstantTimeCompare([]byte(app.SentryKey), []byte(sentryKey(r))) != 1 {
@@ -161,7 +163,7 @@ func registerIngestRoutes(mux *http.ServeMux, s *store.Store) {
 		id, _ := ops.RandomHex(16)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id":"%s"}`, id)
-	})
+	}
 }
 
 // limitKey is the rate limit an envelope counts against: the app's own,
