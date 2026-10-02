@@ -83,13 +83,15 @@ give hakobu a new one with `setup --reconnect`.
 
 When the server, hakobu or the tunnel is down, hakobu can't email you itself. While
 emails are on, hakobu sets up a **watchdog**: a Worker in your Cloudflare account, free
-plan included, that asks the panel's `/healthz` from outside every minute and emails the
-same address when it stops answering and when it's back. You can turn it off in
+plan included, that asks the panel's `/healthz` and each app's address from outside every
+minute and emails the same address when one stops answering and when it's back. With D1
+Edit on the token it keeps 30 days of that in D1, which the app pages and Settings show as
+uptime and outages, including while the server was down. You can turn it off in
 Settings → Notifications.
 
 Settings → Cloudflare token shows what hakobu's token can do, and the home page says when
 it lacks something a newer hakobu needs (tokens made before the watchdog lack Workers
-Scripts Edit and Workers KV Storage Edit). Replace the token right there: the link opens
+Scripts Edit, Workers KV Storage Edit and D1 Edit). Replace the token right there: the link opens
 a new one with every permission filled in.
 
 ### Claude (MCP)

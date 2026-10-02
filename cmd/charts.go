@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"math"
@@ -229,6 +230,19 @@ func registerUsageRoutes(handle func(string, http.HandlerFunc), s *store.Store) 
 			v.Charts = append(v.Charts, targetCharts(target, rows, from, to)...)
 		}
 		render(w, "usage", v)
+	})
+}
+
+// registerUptimeRoutes serves GET /uptime?target=…: the watchdog's record
+// of a target from outside, for the app and settings pages.
+func registerUptimeRoutes(handle func(string, http.HandlerFunc), s *store.Store) {
+	handle("GET /uptime", func(w http.ResponseWriter, r *http.Request) {
+		u, err := ops.UptimeOf(s, r.URL.Query().Get("target"))
+		v := map[string]any{"Uptime": u, "NoHistory": errors.Is(err, ops.ErrNoHistory)}
+		if err != nil && !errors.Is(err, ops.ErrNoHistory) {
+			v["Err"] = err.Error()
+		}
+		render(w, "uptime", v)
 	})
 }
 

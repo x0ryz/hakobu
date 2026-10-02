@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/x0ryz/hakobu/internal/cloudflare"
+	"github.com/x0ryz/hakobu/internal/store"
 )
 
 func binding(w workerUpload, name string) map[string]string {
@@ -42,8 +43,30 @@ func TestWatchdog(t *testing.T) {
 	if b := binding(w, "STATE"); b["type"] != "kv_namespace" || f.kv[b["namespace_id"]] != name {
 		t.Errorf("STATE binding %v, namespaces %v", b, f.kv)
 	}
-	if b := binding(w, "PANEL"); b["text"] != "https://panel.example.com" {
-		t.Errorf("PANEL %v", b)
+	if b := binding(w, "TARGETS"); b["text"] != `[{"name":"panel","url":"https://panel.example.com/healthz","need":"ok"}]` {
+		t.Errorf("TARGETS %v", b)
+	}
+	if b := binding(w, "DB"); b["type"] != "d1" || f.d1[b["database_id"]] != name || len(f.d1SQL) == 0 || !strings.Contains(f.d1SQL[0], "CREATE TABLE IF NOT EXISTS checks") {
+		t.Errorf("DB binding %v, databases %v, statements %v", b, f.d1, f.d1SQL)
+	}
+
+	// A new app with an address is checked from the next hourly check on.
+	if err := s.CreateProject(ctx(), "shop"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.GetProject(ctx(), "shop")
+	if err := s.CreateApp(ctx(), store.CreateAppParams{ProjectID: p.ID, Name: "web", BuildStrategy: "dockerfile"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAppSettings(ctx(), store.SetAppSettingsParams{Name: "web", HealthCheckPath: "/up"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAppDomain(ctx(), store.SetAppDomainParams{Name: "web", Domain: "web.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	CheckForOwner(s)
+	if b := binding(f.workers[name], "TARGETS"); !strings.Contains(b["text"], `{"name":"app:web","url":"https://web.example.com/up","need":"2xx"}`) {
+		t.Errorf("after an app was added, TARGETS %v", b)
 	}
 
 	if err := SetupNotifications(s, "other@example.org", "", ""); err != nil {
@@ -79,8 +102,29 @@ func TestWatchdog(t *testing.T) {
 	if err := TurnOffNotifications(s); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.workers) != 0 || len(f.kv) != 0 || Watchdog(s).On {
-		t.Errorf("left after turning emails off: workers %v, namespaces %v", f.workers, f.kv)
+	if len(f.workers) != 0 || len(f.kv) != 0 || len(f.d1) != 0 || Watchdog(s).On {
+		t.Errorf("left after turning emails off: workers %v, namespaces %v, databases %v", f.workers, f.kv, f.d1)
+	}
+}
+
+// Without D1 Edit the watchdog runs without its history, and gets it when
+// the token does.
+func TestWatchdogHistoryWaitsForD1(t *testing.T) {
+	f := newFakeEmail(t)
+	s := notifyStore(t)
+	f.noD1 = true
+	if err := SetupNotifications(s, "me@example.org", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if b := binding(f.workers[watchdogName()], "DB"); b != nil || len(f.d1) != 0 {
+		t.Errorf("DB binding %v without D1 Edit", b)
+	}
+	f.noD1 = false
+	if err := ReplaceCloudflareToken(s, "tok2"); err != nil {
+		t.Fatal(err)
+	}
+	if b := binding(f.workers[watchdogName()], "DB"); b == nil {
+		t.Error("no history after the token got D1 Edit")
 	}
 }
 

@@ -38,7 +38,8 @@ var APIURL = "https://api.cloudflare.com/client/v4"
 // tokenPermissions are what hakobu needs: the account's domains, their DNS
 // records, a tunnel, R2 for the database backups, email to the owner
 // (zone settings turn Email Routing on for the sender's domain), and a
-// Worker with a KV namespace that watches the panel from outside.
+// Worker with a KV namespace that watches the panel and apps from outside,
+// recording their history in D1.
 var tokenPermissions = []struct{ Key, Type string }{
 	{"zone", "read"},
 	{"dns", "edit"},
@@ -49,6 +50,7 @@ var tokenPermissions = []struct{ Key, Type string }{
 	{"email_sending", "edit"},
 	{"workers_scripts", "edit"},
 	{"workers_kv_storage", "edit"},
+	{"d1", "edit"},
 }
 
 // TokenTemplateURL opens the dashboard's form for a new account-owned API

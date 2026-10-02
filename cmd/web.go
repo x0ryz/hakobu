@@ -187,6 +187,7 @@ func registerWebRoutes(mux *http.ServeMux, s *store.Store) {
 	}
 	handle := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, authed(h)) }
 	registerUsageRoutes(handle, s)
+	registerUptimeRoutes(handle, s)
 
 	// action wraps a mutating handler: an error becomes a toast, success reloads the page.
 	action := func(pattern string, h func(r *http.Request) (redirect string, err error)) {

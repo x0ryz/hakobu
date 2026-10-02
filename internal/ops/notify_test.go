@@ -38,6 +38,9 @@ type fakeEmail struct {
 	workers   map[string]workerUpload // the Workers uploaded, by name
 	kv        map[string]string       // KV namespace ID → title
 	noWorkers bool                    // the token lacks the Workers permissions
+	noD1      bool                    // the token lacks D1 Edit
+	d1        map[string]string       // D1 database ID → name
+	d1SQL     []string                // statements run in D1
 }
 
 // workerUpload is what a Worker was uploaded with.
@@ -48,7 +51,7 @@ type workerUpload struct {
 }
 
 func newFakeEmail(t *testing.T) *fakeEmail {
-	f := &fakeEmail{routed: map[string]bool{}, addresses: map[string]bool{}, txt: map[string][2]string{}, workers: map[string]workerUpload{}, kv: map[string]string{}}
+	f := &fakeEmail{routed: map[string]bool{}, addresses: map[string]bool{}, txt: map[string][2]string{}, workers: map[string]workerUpload{}, kv: map[string]string{}, d1: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -132,6 +135,34 @@ func newFakeEmail(t *testing.T) *fakeEmail {
 		case f.noWorkers && (strings.Contains(r.URL.Path, "/workers/") || strings.Contains(r.URL.Path, "/storage/kv/")):
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []map[string]any{{"code": 10000, "message": "Authentication error"}}})
+		case f.noD1 && strings.Contains(r.URL.Path, "/d1/"):
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []map[string]any{{"code": 10000, "message": "Authentication error"}}})
+		case route == "GET /accounts/acc/d1/database":
+			var list []map[string]string
+			for id, name := range f.d1 {
+				if q := r.URL.Query().Get("name"); q == "" || q == name {
+					list = append(list, map[string]string{"uuid": id, "name": name})
+				}
+			}
+			ok(list)
+		case route == "POST /accounts/acc/d1/database":
+			f.nextID++
+			id := fmt.Sprint("d1-", f.nextID)
+			f.d1[id] = body["name"]
+			ok(map[string]string{"uuid": id})
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/accounts/acc/d1/database/") && strings.HasSuffix(r.URL.Path, "/query"):
+			var q struct{ Batch []struct{ SQL string } }
+			_ = json.Unmarshal(b, &q)
+			var res []map[string]any
+			for _, st := range q.Batch {
+				f.d1SQL = append(f.d1SQL, st.SQL)
+				res = append(res, map[string]any{"results": []any{}})
+			}
+			ok(res)
+		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/accounts/acc/d1/database/"):
+			delete(f.d1, strings.TrimPrefix(r.URL.Path, "/accounts/acc/d1/database/"))
+			ok(nil)
 		case route == "GET /accounts/acc/tokens/verify":
 			ok(map[string]string{"status": "active"})
 		case route == "GET /accounts/acc/cfd_tunnel", route == "GET /accounts/acc/workers/scripts":

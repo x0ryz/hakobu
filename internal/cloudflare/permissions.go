@@ -46,6 +46,7 @@ func (c Client) CheckPermissions(accountID, zoneID string) []Permission {
 		{Permission{Name: "Email Routing Addresses Edit", For: "the address emails go to"}, "/accounts/" + accountID + "/email/routing/addresses?per_page=1"},
 		{Permission{Name: "Workers Scripts Edit", For: "the watchdog"}, "/accounts/" + accountID + "/workers/scripts"},
 		{Permission{Name: "Workers KV Storage Edit", For: "the watchdog"}, "/accounts/" + accountID + "/storage/kv/namespaces?per_page=1"},
+		{Permission{Name: "D1 Edit", For: "uptime history"}, "/accounts/" + accountID + "/d1/database?per_page=1"},
 	}
 	out := make([]Permission, len(checks))
 	var wg sync.WaitGroup

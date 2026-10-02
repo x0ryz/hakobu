@@ -127,7 +127,15 @@ func CreateApp(s *store.Store, projectName string, app store.CreateAppParams, do
 		s.DeleteAppCascade(ctx(), app.Name)
 		return err
 	}
+	async(func() { watchApps(s) })
 	return StartDeploy(s, app.Name, "create")
+}
+
+// watchApps has the watchdog check the apps there are now.
+func watchApps(s *store.Store) {
+	if err := EnsureWatchdog(s, false); err != nil {
+		fmt.Println("watchdog:", err)
+	}
 }
 
 // SetAppBuild changes how the app is built (strategy "railpack" or
@@ -196,6 +204,7 @@ func DeleteApp(s *store.Store, name string) error {
 	if err := SyncTunnel(s); err != nil {
 		fmt.Println("tunnel routes not updated (retrying):", err)
 	}
+	async(func() { watchApps(s) })
 	return nil
 }
 

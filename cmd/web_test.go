@@ -58,6 +58,8 @@ func TestTemplatesRender(t *testing.T) {
 		"oauth-consent": map[string]any{"Client": oauthClient{ID: "https://claude.ai/oauth/claude-code-client-metadata", Name: "Claude Code"}, "Request": authorizeRequest{Query: "a=b"},
 			"RedirectHost": "localhost:3118", "Loopback": true, "Document": true, "Deploy": true, "PublicHost": "p"},
 		"oauth-error": "boom",
+		"uptime": map[string]any{"Uptime": ops.Uptime{AvgMs: 120, Windows: []ops.UptimeWindow{{Label: "24 hours", Pct: 99.5, Checks: 1440}, {Label: "7 days", Pct: 100, Checks: 10}, {Label: "30 days", Pct: 100, Checks: 10}},
+			Outages: []ops.Outage{{Start: time.Unix(1000, 0), End: time.Unix(1120, 0), Status: 530, Ongoing: true}, {Start: time.Unix(0, 0), End: time.Unix(0, 0)}}}},
 		"performance": map[string]any{"App": "web", "Range": "24h", "Routes": []ops.RouteStats{{Name: "/orders/{id}", Count: 20, Errors: 1, AvgMs: 40, P50Ms: 20, P95Ms: 10000, P95Over: true}},
 			"Traces": []teldb.ListTracesRow{{ID: 1, AppName: "web", Name: "/orders/{id}", Status: "internal_error", HttpStatus: 500, DurationMs: 30}}},
 		"trace": traceView{ops.Waterfall{Trace: teldb.Trace{ID: 1, AppName: "web", Name: "/orders/{id}", DurationMs: 1500, HttpStatus: 200, Status: "ok", TraceID: "abc"},
@@ -82,6 +84,11 @@ func TestTemplatesRender(t *testing.T) {
 			Previous: "v0.6.0", UpdatedAt: "t", CanRollBack: true, RollbackLosesData: st == "failed", RollbackBlocked: map[bool]string{true: "gone"}[st == "rolled back"]}}
 		if err := templates.ExecuteTemplate(io.Discard, "settings", data); err != nil {
 			t.Errorf("settings after an update that %s: %v", st, err)
+		}
+	}
+	for _, v := range []map[string]any{{"NoHistory": true}, {"Err": "boom"}, {"Uptime": ops.Uptime{}}} {
+		if err := templates.ExecuteTemplate(io.Discard, "uptime", v); err != nil {
+			t.Errorf("uptime %v: %v", v, err)
 		}
 	}
 	if err := templates.ExecuteTemplate(io.Discard, "app", map[string]any{"App": app, "Project": project}); err != nil {

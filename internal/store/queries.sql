@@ -380,8 +380,9 @@ DELETE FROM oauth_tokens WHERE expires_at < ?;
 SELECT * FROM watchdog WHERE id = 1;
 
 -- name: SaveWatchdog :exec
-INSERT INTO watchdog (id, script, kv_namespace_id) VALUES (1, ?, ?)
-ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = excluded.kv_namespace_id;
+INSERT INTO watchdog (id, script, kv_namespace_id, targets, d1_database_id) VALUES (1, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = excluded.kv_namespace_id,
+	targets = excluded.targets, d1_database_id = excluded.d1_database_id;
 
 -- name: DeleteWatchdog :exec
 DELETE FROM watchdog;

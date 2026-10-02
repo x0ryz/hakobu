@@ -946,7 +946,7 @@ func (q *Queries) GetVolumeBackup(ctx context.Context, id int64) (VolumeBackup, 
 
 const getWatchdog = `-- name: GetWatchdog :one
 
-SELECT id, script, kv_namespace_id, created_at FROM watchdog WHERE id = 1
+SELECT id, script, kv_namespace_id, created_at, targets, d1_database_id FROM watchdog WHERE id = 1
 `
 
 // Watchdog
@@ -958,6 +958,8 @@ func (q *Queries) GetWatchdog(ctx context.Context) (Watchdog, error) {
 		&i.Script,
 		&i.KvNamespaceID,
 		&i.CreatedAt,
+		&i.Targets,
+		&i.D1DatabaseID,
 	)
 	return i, err
 }
@@ -1858,17 +1860,25 @@ func (q *Queries) SaveNotify(ctx context.Context, arg SaveNotifyParams) error {
 }
 
 const saveWatchdog = `-- name: SaveWatchdog :exec
-INSERT INTO watchdog (id, script, kv_namespace_id) VALUES (1, ?, ?)
-ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = excluded.kv_namespace_id
+INSERT INTO watchdog (id, script, kv_namespace_id, targets, d1_database_id) VALUES (1, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET script = excluded.script, kv_namespace_id = excluded.kv_namespace_id,
+	targets = excluded.targets, d1_database_id = excluded.d1_database_id
 `
 
 type SaveWatchdogParams struct {
 	Script        string
 	KvNamespaceID string
+	Targets       string
+	D1DatabaseID  string
 }
 
 func (q *Queries) SaveWatchdog(ctx context.Context, arg SaveWatchdogParams) error {
-	_, err := q.db.ExecContext(ctx, saveWatchdog, arg.Script, arg.KvNamespaceID)
+	_, err := q.db.ExecContext(ctx, saveWatchdog,
+		arg.Script,
+		arg.KvNamespaceID,
+		arg.Targets,
+		arg.D1DatabaseID,
+	)
 	return err
 }
 

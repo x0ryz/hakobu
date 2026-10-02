@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -86,10 +88,17 @@ func EnsureWatchdog(s *store.Store, redeploy bool) error {
 		if err != nil {
 			return err
 		}
-		if exists, err := c.WorkerExists(cf.AccountID, w.Script); err != nil || exists {
+		targets, err := watchdogTargets(s)
+		if err != nil {
 			return err
 		}
-		fmt.Println("the watchdog's Worker is gone from Cloudflare: deploying it again")
+		withHistory := canKeepHistory(TokenPermissions(s, false))
+		if w.Targets == targets && (w.D1DatabaseID != "") == withHistory {
+			if exists, err := c.WorkerExists(cf.AccountID, w.Script); err != nil || exists {
+				return err
+			}
+			fmt.Println("the watchdog's Worker is gone from Cloudflare: deploying it again")
+		}
 	}
 	err := EnableWatchdog(s)
 	setWatchdogErr(err)
@@ -117,13 +126,17 @@ func TurnWatchdogOff(s *store.Store) error {
 }
 
 // EnableWatchdog deploys the watchdog, or deploys it again for the current
-// notification settings.
+// notification settings and apps.
 func EnableWatchdog(s *store.Store) error {
 	n, err := s.GetNotify(ctx())
 	if err != nil {
 		return fmt.Errorf("turn notifications on first: the watchdog emails the address they go to")
 	}
 	c, cf, err := cfClient(s)
+	if err != nil {
+		return err
+	}
+	targets, err := watchdogTargets(s)
 	if err != nil {
 		return err
 	}
@@ -135,9 +148,23 @@ func EnableWatchdog(s *store.Store) error {
 	bindings := []cloudflare.Binding{
 		{"type": "send_email", "name": "EMAIL", "destination_address": n.Email},
 		{"type": "kv_namespace", "name": "STATE", "namespace_id": kv},
-		{"type": "plain_text", "name": "PANEL", "text": panelURL("")},
+		{"type": "plain_text", "name": "TARGETS", "text": targets},
 		{"type": "plain_text", "name": "FROM", "text": n.SenderName + "@" + n.SenderDomain},
 		{"type": "plain_text", "name": "TO", "text": n.Email},
+	}
+	// The history needs D1 Edit, which older tokens lack: the watchdog
+	// runs without it, and gets it once the token has it.
+	d1 := ""
+	if canKeepHistory(TokenPermissions(s, false)) {
+		if d1, err = c.FindOrCreateD1(cf.AccountID, name); err == nil {
+			_, err = c.QueryD1(cf.AccountID, d1, cloudflare.D1Query{SQL: checksSchema})
+		}
+		if err != nil {
+			fmt.Println("the watchdog runs without its history:", err)
+			d1 = ""
+		} else {
+			bindings = append(bindings, cloudflare.Binding{"type": "d1", "name": "DB", "database_id": d1})
+		}
 	}
 	if err := c.UploadWorker(cf.AccountID, name, watchdogJS, watchdogCompatibilityDate, bindings); err != nil {
 		return workersHint(err)
@@ -145,10 +172,63 @@ func EnableWatchdog(s *store.Store) error {
 	if err := c.SetWorkerCrons(cf.AccountID, name, []string{"* * * * *"}); err != nil {
 		return workersHint(err)
 	}
-	return s.SaveWatchdog(ctx(), store.SaveWatchdogParams{Script: name, KvNamespaceID: kv})
+	return s.SaveWatchdog(ctx(), store.SaveWatchdogParams{Script: name, KvNamespaceID: kv, Targets: targets, D1DatabaseID: d1})
 }
 
-// DisableWatchdog removes the watchdog's Worker and KV namespace.
+// checksSchema is the watchdog's history: whether a target answered in a
+// minute (ts, Unix seconds), how fast and with what status (0: none).
+const checksSchema = `CREATE TABLE IF NOT EXISTS checks (
+	target TEXT NOT NULL, ts INTEGER NOT NULL, up INTEGER NOT NULL, ms INTEGER NOT NULL, status INTEGER NOT NULL,
+	PRIMARY KEY (target, ts)
+) WITHOUT ROWID`
+
+// maxWatchedApps keeps the checks of a minute within the 50 requests a
+// Worker on the free plan may make: three tries each, the panel's too.
+const maxWatchedApps = 15
+
+// watchdogTarget is what the watchdog checks: the panel's /healthz, which
+// must say "ok", and each app's health check path at its address.
+type watchdogTarget struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Need string `json:"need"` // "ok", "2xx", or "any" answer but a server error
+}
+
+// watchdogTargets are the panel and the apps with an address, as JSON.
+func watchdogTargets(s *store.Store) (string, error) {
+	targets := []watchdogTarget{{Name: "panel", URL: panelURL("/healthz"), Need: "ok"}}
+	apps, err := s.ListApps(ctx())
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
+	for _, a := range apps {
+		u := PublicURL(a)
+		if u == "" || len(targets) > maxWatchedApps {
+			continue
+		}
+		path := "/" + strings.TrimPrefix(a.HealthCheckPath, "/")
+		need := "2xx"
+		if path == "/" {
+			need = "any"
+		}
+		targets = append(targets, watchdogTarget{Name: "app:" + a.Name, URL: u + path, Need: need})
+	}
+	b, err := json.Marshal(targets)
+	return string(b), err
+}
+
+// canKeepHistory: the token isn't known to lack D1 Edit.
+func canKeepHistory(perms []cloudflare.Permission) bool {
+	for _, p := range cloudflare.Lacking(perms) {
+		if p.For == "uptime history" {
+			return false
+		}
+	}
+	return true
+}
+
+// DisableWatchdog removes the watchdog's Worker, KV namespace and history.
 func DisableWatchdog(s *store.Store) error {
 	w, err := s.GetWatchdog(ctx())
 	if err != nil {
@@ -163,6 +243,11 @@ func DisableWatchdog(s *store.Store) error {
 	}
 	if err := c.DeleteKVNamespace(cf.AccountID, w.KvNamespaceID); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
 		return workersHint(err)
+	}
+	if w.D1DatabaseID != "" {
+		if err := c.DeleteD1(cf.AccountID, w.D1DatabaseID); err != nil {
+			return workersHint(err)
+		}
 	}
 	return s.DeleteWatchdog(ctx())
 }

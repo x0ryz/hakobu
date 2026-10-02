@@ -214,6 +214,8 @@ type Watchdog struct {
 	Script        string
 	KvNamespaceID string
 	CreatedAt     string
+	Targets       string
+	D1DatabaseID  string
 }
 
 type WatchdogOff struct {

@@ -488,6 +488,14 @@
     {{end}}
   </div>
 
+  {{if publicURL .App.App}}
+  <div class="card">
+    <h2 class="h2">From outside</h2>
+    <p class="text-xs text-faint">Whether visitors could reach <span class="mono">{{publicURL .App.App}}</span>, checked every minute by the watchdog on Cloudflare: it keeps counting while the server is down.</p>
+    <div hx-get="/uptime?target=app:{{.App.Name}}" hx-trigger="load" hx-swap="outerHTML"></div>
+  </div>
+  {{end}}
+
   <div class="card">
     <h2 class="h2">Usage</h2>
     <div hx-get="/usage?target=app:{{.App.Name}}{{if .Worker}}&amp;target=worker:{{.App.Name}}{{end}}&amp;range=24h" hx-trigger="load" hx-swap="outerHTML"></div>
@@ -658,6 +666,22 @@
   {{if gt (len .Tx.Spans) (len .Rows)}}<p class="text-xs text-faint">Showing the first {{len .Rows}} spans.</p>{{end}}
 </div>
 {{template "foot"}}{{end}}
+
+{{define "uptime"}}<div class="space-y-3">
+  {{if .NoHistory}}<p class="text-sm text-faint">No history yet: the watchdog keeps it once it's on and hakobu's token has D1 Edit (<a href="/settings#cloudflare" class="underline">Cloudflare token</a>).</p>
+  {{else if .Err}}<p class="text-sm text-bad">{{.Err}}</p>
+  {{else}}{{with .Uptime}}
+  <div class="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+    {{range .Windows}}<span><span class="text-faint">{{.Label}}</span> <span class="mono {{if and .Checks (lt .Pct 99.0)}}text-bad{{end}}">{{if .Checks}}{{printf "%.2f" .Pct}}%{{else}}—{{end}}</span></span>{{end}}
+    {{if .AvgMs}}<span><span class="text-faint">answers in</span> <span class="mono">{{.AvgMs}} ms</span></span>{{end}}
+  </div>
+  {{if .Outages}}
+  <ul class="text-xs space-y-0.5">{{range .Outages}}
+    <li class="mono {{if .Ongoing}}text-bad{{else}}text-dim{{end}}">{{.Start.UTC.Format "2006-01-02 15:04"}}{{if .Ongoing}} → now{{else}} – {{.End.UTC.Format "15:04"}}{{end}} UTC · {{.Minutes}} min · {{if .Status}}HTTP {{.Status}}{{else}}no answer{{end}}</li>
+  {{end}}</ul>
+  {{else if .Windows}}{{if (index .Windows 2).Checks}}<p class="text-xs text-faint">No outages in the last 30 days.</p>{{end}}{{end}}
+  {{end}}{{end}}
+</div>{{end}}
 
 {{define "usage"}}<div class="usage space-y-4">
   <div class="flex gap-1">{{range .Ranges}}<button type="button" hx-get="/usage?{{$.Query}}&amp;range={{.}}" hx-target="closest .usage" hx-swap="outerHTML" class="text-xs px-2 py-0.5 rounded-md border {{if eq . $.Range}}border-ink text-ink{{else}}border-edge text-dim hover:text-ink{{end}}">{{.}}</button>{{end}}</div>
@@ -849,7 +873,8 @@
     <div class="flex items-start justify-between gap-3 border-t border-edge pt-4">
       <div class="space-y-1">
         <h3 class="text-sm font-medium">Watchdog {{if .Watchdog.On}}<span class="text-xs font-normal text-good">on</span>{{else}}<span class="text-xs font-normal text-faint">off</span>{{end}}</h3>
-        <p class="text-sm text-dim">When the server, hakobu or the tunnel is down, hakobu can't email you about it. The watchdog is a Worker in your Cloudflare account{{if .Watchdog.On}} (<span class="mono">{{.Watchdog.Script}}</span>){{end}} that checks the panel every minute from outside and emails you when it stops answering, and when it's back. hakobu sets it up on its own while emails are on; it runs on Cloudflare's free plan.</p>
+        <p class="text-sm text-dim">When the server, hakobu or the tunnel is down, hakobu can't email you about it. The watchdog is a Worker in your Cloudflare account{{if .Watchdog.On}} (<span class="mono">{{.Watchdog.Script}}</span>){{end}} that checks the panel and the apps every minute from outside and emails you when one stops answering, and when it's back; with D1 Edit on the token it keeps 30 days of history. hakobu sets it up on its own while emails are on; it runs on Cloudflare's free plan.</p>
+        {{if .Watchdog.On}}<div hx-get="/uptime?target=panel" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
         {{if .Watchdog.Err}}<p class="text-sm text-bad">{{.Watchdog.Err}}</p>
         {{else if and (not .Watchdog.On) (not .Watchdog.TurnedOff)}}<p class="text-xs text-faint">Waiting for hakobu's token to get Workers Scripts Edit and Workers KV Storage Edit: see <a href="#cloudflare" class="underline">Cloudflare token</a>.</p>{{end}}
       </div>
