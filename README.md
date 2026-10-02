@@ -39,8 +39,8 @@ curl -fsSL https://hakobu.dev/install.sh | sudo bash
 ```
 
 1. The installer shows a Cloudflare link to a new API token with hakobu's permissions
-   filled in: read your domains, manage their DNS records, create a tunnel and keep
-   database backups in R2. Select **Continue to summary** → **Create Token**, copy the
+   filled in: read your domains, manage their DNS records, create a tunnel, keep
+   database backups in R2 and email you when something needs you. Select **Continue to summary** → **Create Token**, copy the
    token and paste it into the terminal (it isn't echoed). Or set `CLOUDFLARE_API_TOKEN`
    before running the installer. Under **Zone Resources** you can pick just the domains
    hakobu should use instead of all of them: whoever takes over the server gets the
@@ -56,6 +56,18 @@ Every app then gets its own address in any domain of the account (`app.example.c
 
 Lost the setup link: `journalctl -u hakobu | grep setup`. Give hakobu a new Cloudflare
 token (after rolling it, say): `cd /opt/hakobu && sudo -u hakobu ./hakobu setup --reconnect`.
+
+### Email notifications
+
+**Settings → Notifications**: enter your address and confirm it from the email
+Cloudflare sends. Hakobu then emails you when a deploy after a push fails, a backup
+fails, an app runs out of memory, the disk is almost full or the master key isn't
+downloaded; each problem once, again only if it's still there hours later, and once
+more when it's gone. It goes through Cloudflare Email Service, free for a confirmed
+address, from your domain if Email Routing is on there already, otherwise from
+`mail.<panel address>`: hakobu never turns Email Routing on for a domain's apex, which
+would replace its MX records. A token made before v0.5 lacks the email permissions:
+give hakobu a new one with `setup --reconnect`.
 
 ### Bringing a panel back on a new server
 

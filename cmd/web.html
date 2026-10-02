@@ -619,6 +619,30 @@
     {{end}}
   </div>
 
+  <div id="notifications" class="card">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="h2">Notifications</h2>
+      {{if .Notify.On}}<div class="flex gap-2 shrink-0">
+        <button hx-post="/settings/notify/test" class="btn" {{if not .Notify.Verified}}disabled{{end}}>Send test email</button>
+        <button hx-delete="/settings/notify" class="btn">Turn off</button>
+      </div>{{end}}
+    </div>
+    {{with .Notify}}{{if .On}}
+    <p class="text-sm text-dim">Emails go to <span class="mono">{{.Email}}</span> from <span class="mono">{{.From}}</span>.</p>
+    {{if .Err}}<p class="text-sm text-bad">{{.Err}}</p>
+    {{else if not .Verified}}<p class="text-sm text-bad">Waiting for you to confirm the address: open the email from Cloudflare and click <span class="mono">Verify email address</span>, then reload this page.</p>{{end}}
+    {{end}}{{end}}
+    <p class="text-sm text-dim">An email when something needs you: a deploy after a push failed, a backup failed, an app ran out of memory, the disk is almost full, the master key isn't downloaded. Each problem is mailed once, again only if it's still there hours later, and once more when it's gone.</p>
+    {{if .CloudflareConnected}}
+    <form hx-post="/settings/notify" class="flex flex-wrap gap-2">
+      <input name="email" type="email" required placeholder="you@example.com" value="{{.Notify.Email}}" class="input flex-1 min-w-48">
+      <input name="from" placeholder="send from (optional), e.g. example.com" class="input flex-1 min-w-48">
+      <button class="btn-pri">{{if .Notify.On}}Change{{else}}Turn on{{end}}</button>
+    </form>
+    <p class="text-xs text-faint">Sent through Cloudflare Email Service, free for an address you confirm. From your domain if Email Routing is already on there, otherwise from <span class="mono">mail.{{.PublicHost}}</span>: hakobu turns it on for that subdomain only, so your domain's own mail isn't touched.</p>
+    {{else}}<p class="text-xs text-faint">Needs Cloudflare connected first.</p>{{end}}
+  </div>
+
   <div id="security" class="card" {{if .Rotation.Running}}hx-get="/settings" hx-trigger="every 2s" hx-select="#security" hx-swap="outerHTML"{{end}}>
     <div class="flex items-center justify-between gap-3">
       <h2 class="h2">Security</h2>

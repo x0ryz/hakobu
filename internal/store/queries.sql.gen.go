@@ -334,6 +334,15 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context, expiresAt string) e
 	return err
 }
 
+const deleteNotify = `-- name: DeleteNotify :exec
+DELETE FROM notify WHERE id = 1
+`
+
+func (q *Queries) DeleteNotify(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteNotify)
+	return err
+}
+
 const deleteProject = `-- name: DeleteProject :exec
 DELETE FROM projects WHERE name = ?
 `
@@ -615,6 +624,19 @@ func (q *Queries) GetGitHubApp(ctx context.Context) (GitHubApp, error) {
 		&i.ClientID,
 		&i.ClientSecret,
 	)
+	return i, err
+}
+
+const getNotify = `-- name: GetNotify :one
+
+SELECT id, email, sender_domain FROM notify WHERE id = 1
+`
+
+// Notifications
+func (q *Queries) GetNotify(ctx context.Context) (Notify, error) {
+	row := q.db.QueryRowContext(ctx, getNotify)
+	var i Notify
+	err := row.Scan(&i.ID, &i.Email, &i.SenderDomain)
 	return i, err
 }
 
@@ -1437,6 +1459,21 @@ func (q *Queries) SaveGitHubApp(ctx context.Context, arg SaveGitHubAppParams) er
 		arg.ClientID,
 		arg.ClientSecret,
 	)
+	return err
+}
+
+const saveNotify = `-- name: SaveNotify :exec
+INSERT INTO notify (id, email, sender_domain) VALUES (1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain
+`
+
+type SaveNotifyParams struct {
+	Email        string
+	SenderDomain string
+}
+
+func (q *Queries) SaveNotify(ctx context.Context, arg SaveNotifyParams) error {
+	_, err := q.db.ExecContext(ctx, saveNotify, arg.Email, arg.SenderDomain)
 	return err
 }
 

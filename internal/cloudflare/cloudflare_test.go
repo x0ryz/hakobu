@@ -24,7 +24,8 @@ func TestTokenTemplateURL(t *testing.T) {
 	if err := json.Unmarshal([]byte(u.Query().Get("permissionGroupKeys")), &perms); err != nil {
 		t.Fatal(err)
 	}
-	want := []struct{ Key, Type string }{{"zone", "read"}, {"dns", "edit"}, {"argotunnel", "edit"}, {"workers_r2", "edit"}}
+	want := []struct{ Key, Type string }{{"zone", "read"}, {"dns", "edit"}, {"argotunnel", "edit"}, {"workers_r2", "edit"},
+		{"zone_settings", "edit"}, {"email_routing_address", "edit"}, {"email_sending", "edit"}}
 	if !slices.Equal(perms, want) {
 		t.Errorf("permissions = %v, want %v", perms, want)
 	}

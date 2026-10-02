@@ -63,6 +63,7 @@ func StartRotation(s *store.Store) error {
 		rotationMu.Lock()
 		rotation.Running, rotation.Manual, rotation.Failures = false, manual, failures
 		rotationMu.Unlock()
+		mailRotation(s, manual, failures)
 	}()
 	return nil
 }
@@ -285,4 +286,23 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// mailRotation sends the owner what's left to do after replacing all
+// secrets, first of all the new master key.
+func mailRotation(s *store.Store, manual []string, failures int) {
+	var b strings.Builder
+	if failures > 0 {
+		fmt.Fprintf(&b, "Replacing all secrets finished with %d failure(s); the log is in Settings: %s\n\n", failures, panelURL("/settings#security"))
+	} else {
+		b.WriteString("All secrets hakobu can replace were replaced.\n\n")
+	}
+	b.WriteString("Download the new master key: the old one doesn't open newer backups. " + panelURL("/settings/master-key") + "\n")
+	if len(manual) > 0 {
+		b.WriteString("\nLeft for you to replace:\n")
+		for _, m := range manual {
+			b.WriteString("  - " + m + "\n")
+		}
+	}
+	sendOrLog(s, "Secrets replaced: download the new master key", b.String())
 }

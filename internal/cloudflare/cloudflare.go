@@ -36,12 +36,16 @@ var httpClient = func() *http.Client {
 var APIURL = "https://api.cloudflare.com/client/v4"
 
 // tokenPermissions are what hakobu needs: the account's domains, their DNS
-// records, a tunnel, and R2 for the database backups.
+// records, a tunnel, R2 for the database backups, and email to the owner
+// (zone settings turn Email Routing on for the sender's domain).
 var tokenPermissions = []struct{ Key, Type string }{
 	{"zone", "read"},
 	{"dns", "edit"},
 	{"argotunnel", "edit"},
 	{"workers_r2", "edit"},
+	{"zone_settings", "edit"},
+	{"email_routing_address", "edit"},
+	{"email_sending", "edit"},
 }
 
 // TokenTemplateURL opens the dashboard's form for a new account-owned API

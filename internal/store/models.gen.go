@@ -111,6 +111,12 @@ type GitHubApp struct {
 	ClientSecret  secret.String
 }
 
+type Notify struct {
+	ID           int64
+	Email        string
+	SenderDomain string
+}
+
 type Owner struct {
 	ID          int64
 	GitHubID    int64

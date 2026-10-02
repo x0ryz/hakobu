@@ -286,3 +286,15 @@ UPDATE cloudflare SET tunnel_token = ? WHERE id = 1;
 
 -- name: SaveCloudflareTunnel :exec
 UPDATE cloudflare SET account_id = ?, tunnel_id = ?, tunnel_token = ?, panel_zone_id = ?, panel_record_id = ? WHERE id = 1;
+
+-- Notifications
+
+-- name: GetNotify :one
+SELECT * FROM notify WHERE id = 1;
+
+-- name: SaveNotify :exec
+INSERT INTO notify (id, email, sender_domain) VALUES (1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email, sender_domain = excluded.sender_domain;
+
+-- name: DeleteNotify :exec
+DELETE FROM notify WHERE id = 1;

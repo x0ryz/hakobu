@@ -111,7 +111,9 @@ func startJob(s *store.Store, appName, trigger string, fn func(app store.App, ou
 		if err == nil {
 			go func() {
 				log := &deployLog{s: s, id: id}
-				log.finish(fn(app, log))
+				err := fn(app, log)
+				log.finish(err)
+				noteDeploy(s, appName, trigger, err)
 				if release(appName) {
 					StartDeploy(s, appName, "push")
 				}

@@ -51,12 +51,13 @@ func WatchOOM(s *store.Store) {
 			if !sure {
 				reason = "was killed (exit 137), most likely because " + oomText(app)
 			}
+			message := fmt.Sprintf("%s %s. Docker restarts it.", container, reason)
 			if err := s.CreateTelemetryEvent(ctx(), store.CreateTelemetryEventParams{
-				AppName: app.Name, Kind: "oom", Level: "fatal",
-				Message: secret.String(fmt.Sprintf("%s %s. Docker restarts it.", container, reason)),
+				AppName: app.Name, Kind: "oom", Level: "fatal", Message: secret.String(message),
 			}); err != nil {
 				fmt.Println("failed to record an out-of-memory kill of", container+":", err)
 			}
+			noteOOM(s, app.Name, message)
 		})
 		fmt.Println("docker events:", err)
 		time.Sleep(5 * time.Second)

@@ -52,6 +52,13 @@ func LastPanelBackup() string {
 	return lastPanel.at.UTC().Format("2006-01-02 15:04 UTC")
 }
 
+// panelBackedUp reports whether a panel backup is known to exist.
+func panelBackedUp() bool {
+	lastPanel.Lock()
+	defer lastPanel.Unlock()
+	return !lastPanel.at.IsZero()
+}
+
 func setLastPanel(at time.Time, err error) {
 	lastPanel.Lock()
 	defer lastPanel.Unlock()
